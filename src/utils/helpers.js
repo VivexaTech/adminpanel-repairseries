@@ -3,12 +3,31 @@ import clsx from 'clsx'
 
 export const cn = (...inputs) => clsx(inputs)
 
-export const currency = (value) =>
-  new Intl.NumberFormat('en-IN', {
+/** Sum-safe numeric amount from a booking (Firestore often stores numbers as strings). */
+export const getBookingAmount = (booking) => {
+  if (!booking || typeof booking !== 'object') return 0
+  const raw =
+    booking.amount ?? booking.totalAmount ?? booking.total ?? booking.price ?? booking.servicePrice
+  if (raw == null || raw === '') return 0
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0
+  const n = Number(typeof raw === 'string' ? raw.trim() : raw)
+  return Number.isFinite(n) ? n : 0
+}
+
+export const isBookingCompleted = (booking) =>
+  String(booking?.status ?? '')
+    .trim()
+    .toLowerCase() === 'completed'
+
+export const currency = (value) => {
+  const n = Number(value)
+  const safe = Number.isFinite(n) ? n : 0
+  return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
     maximumFractionDigits: 0,
-  }).format(value || 0)
+  }).format(safe)
+}
 
 export const compactNumber = (value) =>
   new Intl.NumberFormat('en-IN', {

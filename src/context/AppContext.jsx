@@ -20,6 +20,7 @@ import { geocodeAddressString } from '../services/geocode'
 import { playChatMessageSound, playNewBookingSiren, preloadAlertSounds } from '../utils/alertSounds'
 import { formatBookingAddressForDisplay, normalizeBookingAddressForStorage } from '../utils/bookingAddress'
 import { getBookingLatLng, parseCoord } from '../utils/geo'
+import { getBookingAmount, isBookingCompleted } from '../utils/helpers'
 import { ROLES } from '../utils/rbac'
 import { markSoundPlayed, wasSoundPlayed } from '../utils/soundDedupe'
 
@@ -568,7 +569,7 @@ export function AppProvider({ children }) {
   }
 
   const metrics = useMemo(() => {
-    const completed = data.bookings.filter((booking) => booking.status === 'Completed')
+    const completed = data.bookings.filter((booking) => isBookingCompleted(booking))
     const pending = data.bookings.filter((booking) =>
       ['Pending', 'New', 'Assigned'].includes(booking.status),
     )
@@ -580,7 +581,7 @@ export function AppProvider({ children }) {
         return new Date(raw).toDateString() === todayKey
       },
     )
-    const totalEarnings = completed.reduce((total, booking) => total + booking.amount, 0)
+    const totalEarnings = completed.reduce((total, booking) => total + getBookingAmount(booking), 0)
     return {
       totalOrdersCompleted: completed.length,
       pendingBookings: pending.length,

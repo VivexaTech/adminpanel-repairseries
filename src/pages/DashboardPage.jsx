@@ -10,7 +10,7 @@ import {
 import { useMemo } from 'react'
 import { Card, PageHeader, Badge } from '../components/ui'
 import { useApp } from '../context/useApp'
-import { compactNumber, currency, formatDateTime } from '../utils/helpers'
+import { compactNumber, currency, formatDateTime, getBookingAmount, isBookingCompleted } from '../utils/helpers'
 
 export function DashboardPage() {
   const { bookings, customers, metrics, loading } = useApp()
@@ -27,14 +27,14 @@ export function DashboardPage() {
     })
 
     bookings
-      .filter((b) => b.status === 'Completed')
+      .filter((b) => isBookingCompleted(b))
       .forEach((b) => {
         const raw = b.scheduledAt?.toDate?.() || b.dateTime || b.scheduledAt
         if (!raw) return
         const d = new Date(raw)
         const key = `${d.getFullYear()}-${d.getMonth()}`
         const idx = months.findIndex((m) => m.key === key)
-        if (idx >= 0) months[idx].revenue += Number(b.amount || 0)
+        if (idx >= 0) months[idx].revenue += getBookingAmount(b)
       })
 
     return months.map(({ month, revenue }) => ({ month, revenue }))
