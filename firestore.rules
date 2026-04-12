@@ -1,0 +1,92 @@
+rules_version = '2';
+
+// Deploy: firebase deploy --only firestore:rules
+//
+// Bootstrap: Create the first Super Admin manually in Firestore:
+//   Collection: adminUsers
+//   Document ID: <Firebase Auth UID of your admin>
+//   Fields: name, email, role: "superAdmin", status: "active", createdAt (timestamp)
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function authed() {
+      return request.auth != null;
+    }
+
+    function adminProfile() {
+      return get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data;
+    }
+
+    function isActiveAdmin() {
+      return authed() && adminProfile().status == 'active';
+    }
+
+    function role() {
+      return adminProfile().role;
+    }
+
+    function isSuperAdmin() {
+      return isActiveAdmin() && role() == 'superAdmin';
+    }
+
+    function isSupportManager() {
+      return isActiveAdmin() && role() == 'supportManager';
+    }
+
+    function isTechnicianManager() {
+      return isActiveAdmin() && role() == 'technicianManager';
+    }
+
+    function isBookingManager() {
+      return isActiveAdmin() && role() == 'bookingManager';
+    }
+
+    match /adminUsers/{userId} {
+      allow read: if authed() && (
+        request.auth.uid == userId ||
+        isSuperAdmin()
+      );
+      allow create: if isSuperAdmin();
+      allow update: if isSuperAdmin();
+      allow delete: if false;
+    }
+
+    match /customers/{docId} {
+      allow read, write: if isSuperAdmin() || isBookingManager();
+    }
+
+    match /technicians/{docId} {
+      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager();
+      allow write: if isSuperAdmin() || isTechnicianManager();
+    }
+
+    match /bookings/{docId} {
+      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager();
+      allow write: if isSuperAdmin() || isBookingManager();
+    }
+
+    match /services/{docId} {
+      allow read: if isSuperAdmin() || isBookingManager();
+      allow write: if isSuperAdmin();
+    }
+
+    match /categories/{docId} {
+      allow read: if isSuperAdmin() || isBookingManager();
+      allow write: if isSuperAdmin();
+    }
+
+    match /supportChats/{chatId} {
+      allow read, write: if isSuperAdmin() || isSupportManager();
+
+      match /messages/{msgId} {
+        allow read, create: if isSuperAdmin() || isSupportManager();
+        allow update, delete: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,20 +1,29 @@
 import { useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { ShieldCheck } from 'lucide-react'
+import { LoaderCircle, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { useApp } from '../context/useApp'
 import { Button, Card, Field, Input } from '../components/ui'
 import { isFirebaseConfigured } from '../firebase/config'
+import { getDefaultRoute } from '../utils/rbac'
 
 export function LoginPage() {
-  const { session, login } = useApp()
+  const { session, login, authLoading } = useApp()
   const [form, setForm] = useState({
-    email: 'admin@repairseries.com',
-    password: 'Admin@123',
+    email: '',
+    password: '',
   })
   const [loading, setLoading] = useState(false)
 
-  if (session) return <Navigate to="/" replace />
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <LoaderCircle className="size-8 animate-spin text-[var(--primary)]" />
+      </div>
+    )
+  }
+
+  if (session) return <Navigate to={getDefaultRoute(session.role)} replace />
 
   const handleSubmit = async (event) => {
     event.preventDefault()

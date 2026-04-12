@@ -65,29 +65,83 @@ export function CustomersPage() {
         title="Customer Management"
         description="Search, inspect, and manage customer profiles with quick moderation actions."
         actions={
-          <>
-            <SearchInput value={search} onChange={setSearch} placeholder="Search customers..." />
-            <Button onClick={() => setOpen(true)}>Add Customer</Button>
+          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
+            <div className="w-full sm:w-[min(100%,22rem)]">
+              <SearchInput value={search} onChange={setSearch} placeholder="Search customers..." />
+            </div>
+            <Button className="w-full sm:w-auto" onClick={() => setOpen(true)}>
+              Add Customer
+            </Button>
             <Button
               variant="ghost"
+              className="w-full sm:w-auto"
               onClick={() => exportRows('customers.csv', filteredCustomers)}
             >
               Export CSV
             </Button>
-          </>
+          </div>
         }
       />
 
       <Card className="overflow-hidden p-0">
         {loading.customers ? (
-          <div className="p-5 text-sm text-slate-500 dark:text-slate-400">Loading customers...</div>
+          <div className="p-5 text-sm text-[var(--on-surface-variant)]">Loading customers...</div>
         ) : null}
-        <div className="overflow-x-auto">
+
+        {/* Mobile: stacked cards */}
+        <div className="space-y-3 p-4 md:hidden">
+          {filteredCustomers.map((customer) => (
+            <div
+              key={customer.id}
+              className="rounded-2xl border border-[var(--border)] bg-[var(--surface-lowest)] p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-base font-semibold text-[var(--on-surface)]">{customer.name}</p>
+                  <p className="mt-1 text-sm text-[var(--on-surface-variant)]">{customer.phone}</p>
+                  <p className="mt-1 break-words text-sm text-[var(--on-surface-variant)]">{customer.email}</p>
+                </div>
+                <Badge tone={customer.blocked ? 'danger' : 'success'}>{customer.blocked ? 'Blocked' : 'Active'}</Badge>
+              </div>
+
+              <p className="mt-3 text-sm leading-relaxed text-[var(--on-surface)]">{customer.address}</p>
+
+              <div className="mt-4 flex items-center justify-between gap-3 text-sm text-[var(--on-surface-variant)]">
+                <span>Bookings: {customer.totalBookings}</span>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <Button variant="ghost" className="w-full" onClick={() => setSelected(customer)}>
+                  View
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="w-full"
+                  onClick={() => toggleCustomerBlock(customer.id, customer.blocked)}
+                  disabled={Boolean(mutating.customerBlock)}
+                >
+                  {customer.blocked ? 'Unblock' : 'Block'}
+                </Button>
+                <Button
+                  variant="danger"
+                  className="w-full"
+                  onClick={() => deleteCustomer(customer.id)}
+                  disabled={Boolean(mutating.customerDelete)}
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Desktop: table */}
+        <div className="hidden overflow-x-auto md:block">
           <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/70">
+            <thead className="border-b border-[var(--border)] bg-[var(--surface-low)]">
               <tr>
                 {['Name', 'Phone', 'Email', 'Address', 'Total Bookings', 'Status', 'Actions'].map((header) => (
-                  <th key={header} className="px-5 py-4 font-semibold text-slate-600 dark:text-slate-300">
+                  <th key={header} className="px-5 py-4 font-semibold text-[var(--on-surface-variant)]">
                     {header}
                   </th>
                 ))}
@@ -95,8 +149,8 @@ export function CustomersPage() {
             </thead>
             <tbody>
               {filteredCustomers.map((customer) => (
-                <tr key={customer.id} className="border-b border-slate-100 dark:border-slate-800/70">
-                  <td className="px-5 py-4 font-medium text-slate-900 dark:text-white">{customer.name}</td>
+                <tr key={customer.id} className="border-b border-[var(--border)]/70">
+                  <td className="px-5 py-4 font-medium text-[var(--on-surface)]">{customer.name}</td>
                   <td className="px-5 py-4">{customer.phone}</td>
                   <td className="px-5 py-4">{customer.email}</td>
                   <td className="px-5 py-4">{customer.address}</td>
@@ -138,9 +192,9 @@ export function CustomersPage() {
         {selected ? (
           <div className="grid gap-4 md:grid-cols-2">
             {Object.entries(selected).map(([key, value]) => (
-              <div key={key} className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{key}</p>
-                <p className="mt-2 text-sm text-slate-900 dark:text-white">{String(value)}</p>
+              <div key={key} className="rounded-2xl border border-[var(--border)] bg-[var(--surface-lowest)] p-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-[var(--on-surface-variant)]">{key}</p>
+                <p className="mt-2 break-words text-sm text-[var(--on-surface)]">{String(value)}</p>
               </div>
             ))}
           </div>

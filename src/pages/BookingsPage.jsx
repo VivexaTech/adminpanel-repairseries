@@ -4,6 +4,14 @@ import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Tex
 import { useApp } from '../context/useApp'
 import { exportRows } from '../services/csv'
 import { currency, formatDateTime } from '../utils/helpers'
+import {
+  addressToFormString,
+  bookingAddressSearchText,
+  formatBookingAddressForDisplay,
+  formatBookingAddressShort,
+  normalizeBookingAddressForStorage,
+} from '../utils/bookingAddress'
+import { ROLES } from '../utils/rbac'
 import { getBookingsForDay } from '../services/firestore'
 
 const statusPriority = { New: 1, Assigned: 2, Pending: 3, Completed: 4 }
@@ -14,9 +22,11 @@ export function BookingsPage() {
     customers,
     technicians,
     services,
+    session,
     assignTechnician,
     updateBookingStatus,
     createBooking,
+    backfillMissingBookingCoordinates,
     loading,
     mutating,
   } = useApp()
@@ -30,6 +40,8 @@ export function BookingsPage() {
     serviceId: '',
     scheduledAt: '',
     address: '',
+    latitude: '',
+    longitude: '',
     notes: '',
     technicianId: '',
     amount: '',
@@ -54,12 +66,21 @@ export function BookingsPage() {
     () =>
       bookings
         .filter((booking) =>
-          [booking.id, booking.serviceName, booking.customerId, booking.status]
+          [
+            booking.id,
+            booking.serviceName,
+            booking.customerId,
+            booking.status,
+            bookingAddressSearchText(booking.address),
+          ]
             .join(' ')
-            .toLowerCase()
             .includes(search.toLowerCase()),
         )
-        .sort((a, b) => statusPriority[a.status] - statusPriority[b.status]),
+        .sort((a, b) => {
+          const pa = statusPriority[a.status] ?? 99
+          const pb = statusPriority[b.status] ?? 99
+          return pa - pb
+        }),
     [bookings, search],
   )
 
@@ -80,6 +101,8 @@ export function BookingsPage() {
       serviceId: '',
       scheduledAt: '',
       address: '',
+      latitude: '',
+      longitude: '',
       notes: '',
       technicianId: '',
       amount: '',
@@ -142,10 +165,16 @@ export function BookingsPage() {
     run()
   }, [createOpen, createForm.scheduledAt, createForm.serviceId, serviceMap])
 
-  const createAvailableTechnicians = technicians
-    .filter((t) => t.status === 'Available')
-    .filter((t) => !busyTechnicianIds.has(t.id))
-    .filter((t) => !createAvailability.busyTechIds.has(t.id))
+  const baseCreateTechnicians = useMemo(
+    () =>
+      technicians
+        .filter((t) => t.status === 'Available')
+        .filter((t) => !busyTechnicianIds.has(t.id))
+        .filter((t) => !createAvailability.busyTechIds.has(t.id)),
+    [technicians, busyTechnicianIds, createAvailability.busyTechIds],
+  )
+
+  const createAvailableTechnicians = baseCreateTechnicians
 
   useEffect(() => {
     const loadAvailability = async () => {
@@ -200,14 +229,26 @@ export function BookingsPage() {
     loadAvailability()
   }, [modalState.mode, modalState.booking])
 
-  const availableTechnicians = technicians
-    .filter((technician) => technician.status === 'Available')
-    .filter(
-      (technician) =>
-        !busyTechnicianIds.has(technician.id) ||
-        modalState.booking?.technicianId === technician.id,
-    )
-    .filter((technician) => !availability.busyTechIds.has(technician.id))
+  useEffect(() => {
+    if (!createForm.technicianId) return
+    const stillOk = createAvailableTechnicians.some((t) => t.id === createForm.technicianId)
+    if (!stillOk) setCreateForm((c) => ({ ...c, technicianId: '' }))
+  }, [createForm.technicianId, createAvailableTechnicians])
+
+  const baseAssignTechnicians = useMemo(
+    () =>
+      technicians
+        .filter((technician) => technician.status === 'Available')
+        .filter(
+          (technician) =>
+            !busyTechnicianIds.has(technician.id) ||
+            modalState.booking?.technicianId === technician.id,
+        )
+        .filter((technician) => !availability.busyTechIds.has(technician.id)),
+    [technicians, busyTechnicianIds, availability.busyTechIds, modalState.booking?.technicianId],
+  )
+
+  const availableTechnicians = baseAssignTechnicians
 
   return (
     <div className="space-y-4">
@@ -226,12 +267,28 @@ export function BookingsPage() {
                   sortedBookings.map((booking) => ({
                     ...booking,
                     customerName: customerMap[booking.customerId]?.name || booking.customerId,
+                    address: formatBookingAddressForDisplay(booking.address),
                   })),
                 )
               }
             >
               Export CSV
             </Button>
+            {session?.role === ROLES.SUPER_ADMIN || session?.role === ROLES.BOOKING_MANAGER ? (
+              <Button
+                variant="ghost"
+                disabled={Boolean(mutating.bookingGeocodeBackfill)}
+                onClick={async () => {
+                  try {
+                    await backfillMissingBookingCoordinates()
+                  } catch (e) {
+                    toast.error(e.message)
+                  }
+                }}
+              >
+                {mutating.bookingGeocodeBackfill ? 'Geocoding…' : 'Fill missing coordinates'}
+              </Button>
+            ) : null}
           </>
         }
       />
@@ -253,30 +310,38 @@ export function BookingsPage() {
                       ? 'success'
                       : booking.status === 'Assigned'
                         ? 'info'
-                        : 'warning'
+                        : booking.status === 'Pending'
+                          ? 'neutral'
+                          : 'warning'
                   }
                 >
-                  {booking.status}
+                  {booking.status || 'Unknown'}
                 </Badge>
               </div>
-              <p className="text-sm text-slate-500 dark:text-slate-400">{booking.serviceName}</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Service: {booking.serviceName}
+              </p>
+              <p className="truncate text-sm text-slate-600 dark:text-slate-300" title={formatBookingAddressForDisplay(booking.address)}>
+                Address: {formatBookingAddressShort(booking.address)}
+              </p>
               <p className="text-sm text-slate-500 dark:text-slate-400">
                 Customer: {customerMap[booking.customerId]?.name || booking.customerId}
               </p>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                Date:{' '}
+                Date & time:{' '}
                 {formatDateTime(
                   booking.scheduledAt?.toDate?.() || booking.dateTime || booking.scheduledAt,
                 )}
               </p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Status: {booking.status || 'Unknown'}</p>
               <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
                 Price: {currency(booking.amount)}
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button variant="ghost" onClick={() => setModalState({ mode: 'customer', booking })}>
-                View Customer
+              <Button variant="ghost" onClick={() => setModalState({ mode: 'details', booking })}>
+                View Details
               </Button>
               <Button
                 onClick={() => {
@@ -306,21 +371,103 @@ export function BookingsPage() {
 
       <Modal
         open={Boolean(modalState.booking)}
-        title={modalState.mode === 'customer' ? 'Customer Details' : 'Assign Technician'}
+        title={modalState.mode === 'details' ? 'Booking details' : 'Assign Technician'}
         onClose={() => setModalState({ mode: null, booking: null })}
+        className={modalState.mode === 'details' ? 'max-w-2xl' : undefined}
       >
         {modalState.booking ? (
-          modalState.mode === 'customer' ? (
-            <div className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
-              <p>Customer: {customerMap[modalState.booking.customerId]?.name}</p>
-              <p>Email: {customerMap[modalState.booking.customerId]?.email}</p>
-              <p>Phone: {customerMap[modalState.booking.customerId]?.phone}</p>
-              <p>Address: {customerMap[modalState.booking.customerId]?.address}</p>
+          modalState.mode === 'details' ? (
+            <div className="grid gap-6 text-sm md:grid-cols-2">
+              <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Customer
+                </h4>
+                <p className="text-slate-900 dark:text-white">
+                  <span className="text-slate-500 dark:text-slate-400">Name: </span>
+                  {customerMap[modalState.booking.customerId]?.name || '—'}
+                </p>
+                <p className="text-slate-700 dark:text-slate-300">
+                  <span className="text-slate-500 dark:text-slate-400">Phone: </span>
+                  {customerMap[modalState.booking.customerId]?.phone || '—'}
+                </p>
+                <p className="text-slate-700 dark:text-slate-300">
+                  <span className="text-slate-500 dark:text-slate-400">Email: </span>
+                  {customerMap[modalState.booking.customerId]?.email || '—'}
+                </p>
+                <p className="whitespace-pre-wrap break-words text-slate-700 dark:text-slate-300">
+                  <span className="block text-slate-500 dark:text-slate-400">Full address</span>
+                  {formatBookingAddressForDisplay(customerMap[modalState.booking.customerId]?.address)}
+                </p>
+              </div>
+              <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Booking
+                </h4>
+                <p className="text-slate-900 dark:text-white">
+                  <span className="text-slate-500 dark:text-slate-400">Booking code: </span>
+                  {modalState.booking.bookingCode ||
+                    (modalState.booking.id ? `BK-${String(modalState.booking.id).slice(-6).toUpperCase()}` : '—')}
+                </p>
+                <p className="text-slate-700 dark:text-slate-300">
+                  <span className="text-slate-500 dark:text-slate-400">Service: </span>
+                  {modalState.booking.serviceName || '—'}
+                </p>
+                <p className="text-slate-700 dark:text-slate-300">
+                  <span className="text-slate-500 dark:text-slate-400">Date & time: </span>
+                  {formatDateTime(
+                    modalState.booking.scheduledAt?.toDate?.() ||
+                      modalState.booking.dateTime ||
+                      modalState.booking.scheduledAt,
+                  )}
+                </p>
+                <p className="text-slate-700 dark:text-slate-300">
+                  <span className="text-slate-500 dark:text-slate-400">Status: </span>
+                  {modalState.booking.status || 'Unknown'}
+                </p>
+                <p className="text-slate-700 dark:text-slate-300">
+                  <span className="text-slate-500 dark:text-slate-400">Amount: </span>
+                  {currency(modalState.booking.amount)}
+                </p>
+                <p className="whitespace-pre-wrap break-words text-slate-700 dark:text-slate-300">
+                  <span className="block text-slate-500 dark:text-slate-400">Job address</span>
+                  {formatBookingAddressForDisplay(modalState.booking.address)}
+                </p>
+                <p className="whitespace-pre-wrap break-words text-slate-700 dark:text-slate-300">
+                  <span className="block text-slate-500 dark:text-slate-400">Notes</span>
+                  {(() => {
+                    const n = modalState.booking.notes
+                    if (n == null || n === '') return '—'
+                    if (typeof n === 'string') return n.trim() || '—'
+                    return String(n)
+                  })()}
+                </p>
+              </div>
             </div>
           ) : (
             <div className="space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm dark:border-slate-700 dark:bg-slate-900/40">
+                <p className="font-medium text-slate-900 dark:text-white">
+                  {modalState.booking.serviceName}
+                </p>
+                <p className="mt-2 text-slate-600 dark:text-slate-300">
+                  <span className="text-slate-500 dark:text-slate-400">Address: </span>
+                  {formatBookingAddressForDisplay(modalState.booking.address)}
+                </p>
+                <p className="mt-1 text-slate-600 dark:text-slate-300">
+                  <span className="text-slate-500 dark:text-slate-400">Date & time: </span>
+                  {formatDateTime(
+                    modalState.booking.scheduledAt?.toDate?.() ||
+                      modalState.booking.dateTime ||
+                      modalState.booking.scheduledAt,
+                  )}
+                </p>
+                <p className="mt-1 text-slate-600 dark:text-slate-300">
+                  <span className="text-slate-500 dark:text-slate-400">Status: </span>
+                  {modalState.booking.status}
+                </p>
+              </div>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                Technician can be assigned only after completing their current booking.
+                Only technicians who are available and not busy at this time are listed.
               </p>
               {availability.loading ? (
                 <div className="text-sm text-slate-500 dark:text-slate-400">Checking availability...</div>
@@ -334,7 +481,7 @@ export function BookingsPage() {
                 <option value="">Select technician</option>
                 {availableTechnicians.map((technician) => (
                   <option key={technician.id} value={technician.id}>
-                    {technician.name} • {technician.skills.join(', ')}
+                    {technician.name} • {(technician.skills || []).join(', ') || '—'}
                   </option>
                 ))}
               </Select>
@@ -378,8 +525,12 @@ export function BookingsPage() {
                 return
               }
 
-              const address = createForm.address.trim() || customer.address || ''
-              if (!address) {
+              const addressRaw =
+                createForm.address.trim() ||
+                addressToFormString(customer.address) ||
+                ''
+              const address = normalizeBookingAddressForStorage(addressRaw)
+              if (formatBookingAddressForDisplay(address) === '—') {
                 toast.error('Address is required.')
                 return
               }
@@ -396,6 +547,8 @@ export function BookingsPage() {
                 serviceName: service.name,
                 scheduledAt,
                 address,
+                latitude: createForm.latitude,
+                longitude: createForm.longitude,
                 notes: createForm.notes,
                 durationMinutes: Number(service.duration || 60),
                 amount: Number(createForm.amount || service.price || 0),
@@ -417,7 +570,10 @@ export function BookingsPage() {
                 setCreateForm((c) => ({
                   ...c,
                   customerId,
-                  address: customer?.address || c.address,
+                  address:
+                    customer != null
+                      ? addressToFormString(customer.address) || c.address
+                      : c.address,
                 }))
               }}
               required
@@ -472,7 +628,7 @@ export function BookingsPage() {
               <option value="">Not assigned</option>
               {createAvailableTechnicians.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.name} • {t.skills.join(', ')}
+                  {t.name} • {(t.skills || []).join(', ') || '—'}
                 </option>
               ))}
             </Select>
@@ -497,6 +653,39 @@ export function BookingsPage() {
                 required
               />
             </Field>
+          </div>
+
+          <Field label="Latitude (optional override)">
+            <Input
+              type="number"
+              step="any"
+              value={createForm.latitude}
+              onChange={(e) => setCreateForm((c) => ({ ...c, latitude: e.target.value }))}
+              placeholder="Leave blank to geocode from address"
+            />
+          </Field>
+          <Field label="Longitude (optional override)">
+            <Input
+              type="number"
+              step="any"
+              value={createForm.longitude}
+              onChange={(e) => setCreateForm((c) => ({ ...c, longitude: e.target.value }))}
+              placeholder="Leave blank to geocode from address"
+            />
+          </Field>
+
+          <div className="md:col-span-2 rounded-2xl border border-[var(--outline-variant)]/60 bg-[var(--surface-low)]/50 px-4 py-3 text-sm text-[var(--on-surface-variant)]">
+            <p>
+              Optional <code className="rounded bg-[var(--surface-high)] px-1">latitude</code> /{' '}
+              <code className="rounded bg-[var(--surface-high)] px-1">longitude</code> override the map pin. If left
+              blank, coordinates are filled when geocoding succeeds (same as <strong>Fill missing coordinates</strong>).
+            </p>
+            <p className="mt-2">
+              For production geocoding, set{' '}
+              <code className="rounded bg-[var(--surface-high)] px-1">VITE_GOOGLE_GEOCODING_API_KEY</code> in{' '}
+              <code className="rounded bg-[var(--surface-high)] px-1">.env.local</code>; dev can use the Nominatim proxy
+              (<code className="rounded bg-[var(--surface-high)] px-1">/nominatim</code>).
+            </p>
           </div>
 
           <div className="md:col-span-2">
@@ -529,7 +718,7 @@ export function BookingsPage() {
               className="w-full sm:w-auto"
               disabled={Boolean(mutating.bookingCreate)}
             >
-              {mutating.bookingCreate ? 'Saving...' : 'Create Booking'}
+              {mutating.bookingCreate ? 'Saving…' : 'Create Booking'}
             </Button>
           </div>
         </form>

@@ -19,8 +19,13 @@ export const isFirebaseConfigured = Boolean(
 
 const app = isFirebaseConfigured ? initializeApp(firebaseConfig) : null
 
+/** Secondary app so `createUserWithEmailAndPassword` does not replace the signed-in admin session. */
+const secondaryApp =
+  isFirebaseConfigured && app ? initializeApp(firebaseConfig, 'RepairSeriesAdminSecondary') : null
+
 export const firebaseApp = app
 export const auth = app ? getAuth(app) : null
+export const secondaryAuth = secondaryApp ? getAuth(secondaryApp) : null
 export const db = app ? getFirestore(app) : null
 
 export const analyticsPromise = app

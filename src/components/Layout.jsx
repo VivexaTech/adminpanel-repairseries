@@ -1,18 +1,31 @@
-import { Bell, LayoutDashboard, MoonStar, Settings, SunMedium, User, Wrench } from 'lucide-react'
+import {
+  Bell,
+  LayoutDashboard,
+  MessageCircle,
+  MoonStar,
+  Settings,
+  SunMedium,
+  User,
+  Users,
+  Wrench,
+} from 'lucide-react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useApp } from '../context/useApp'
 import { cn } from '../utils/helpers'
+import { canAccessPath, formatRoleLabel } from '../utils/rbac'
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/customers', label: 'Customers', icon: User },
   { to: '/technicians', label: 'Technicians', icon: Wrench },
   { to: '/bookings', label: 'Bookings', icon: Bell },
+  { to: '/support', label: 'Support', icon: MessageCircle, badgeKey: 'support' },
   { to: '/services', label: 'Services', icon: Settings },
+  { to: '/users', label: 'Users', icon: Users },
 ]
 
 export function AdminLayout({ children }) {
-  const { session, theme, setTheme, logout } = useApp()
+  const { session, theme, setTheme, logout, supportUnreadTotal } = useApp()
   const location = useLocation()
 
   return (
@@ -32,7 +45,9 @@ export function AdminLayout({ children }) {
           </div>
 
           <nav className="space-y-2">
-            {navItems.map((item) => (
+            {navItems
+              .filter((item) => session?.role && canAccessPath(session.role, item.to))
+              .map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -46,7 +61,14 @@ export function AdminLayout({ children }) {
                 }
               >
                 <item.icon className="size-4" />
-                {item.label}
+                <span className="flex flex-1 items-center justify-between gap-2">
+                  {item.label}
+                  {item.badgeKey === 'support' && supportUnreadTotal > 0 ? (
+                    <span className="min-w-[1.25rem] rounded-full bg-[var(--error)] px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-[var(--surface-lowest)]">
+                      {supportUnreadTotal > 99 ? '99+' : supportUnreadTotal}
+                    </span>
+                  ) : null}
+                </span>
               </NavLink>
             ))}
           </nav>
@@ -54,7 +76,9 @@ export function AdminLayout({ children }) {
           <div className="mt-8 rounded-3xl bg-[var(--secondary)] p-5 text-[var(--surface-lowest)]">
             <p className="text-sm text-[color-mix(in_srgb,var(--surface-lowest)_80%,transparent)]">Logged in as</p>
             <p className="mt-2 font-semibold">{session?.name}</p>
-            <p className="text-sm text-[color-mix(in_srgb,var(--surface-lowest)_80%,transparent)]">{session?.role}</p>
+            <p className="text-sm text-[color-mix(in_srgb,var(--surface-lowest)_80%,transparent)]">
+              {formatRoleLabel(session?.role)}
+            </p>
           </div>
 
           <div className="mt-4 flex gap-2">

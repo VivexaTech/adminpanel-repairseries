@@ -12,6 +12,10 @@ const emptyForm = {
   pendingBookings: 0,
   status: 'Available',
   skills: '',
+  areaAddress: '',
+  latitude: '',
+  longitude: '',
+  serviceRadius: '10',
 }
 
 export function TechniciansPage() {
@@ -23,7 +27,13 @@ export function TechniciansPage() {
   const filtered = useMemo(
     () =>
       technicians.filter((technician) =>
-        [technician.name, technician.email, technician.phone, technician.skills.join(' ')]
+        [
+          technician.name,
+          technician.email,
+          technician.phone,
+          technician.skills.join(' '),
+          technician.areaAddress || '',
+        ]
           .join(' ')
           .toLowerCase()
           .includes(search.toLowerCase()),
@@ -61,6 +71,10 @@ export function TechniciansPage() {
       completedBookings: Number(form.completedBookings),
       pendingBookings: Number(form.pendingBookings),
       skills: form.skills.split(',').map((item) => item.trim()).filter(Boolean),
+      areaAddress: form.areaAddress?.trim() || '',
+      latitude: form.latitude === '' ? undefined : form.latitude,
+      longitude: form.longitude === '' ? undefined : form.longitude,
+      serviceRadius: Number(form.serviceRadius) > 0 ? Number(form.serviceRadius) : 10,
     })
     setForm(emptyForm)
     setOpen(false)
@@ -68,8 +82,20 @@ export function TechniciansPage() {
 
   const edit = (technician) => {
     setForm({
+      ...emptyForm,
       ...technician,
       skills: technician.skills.join(', '),
+      areaAddress: technician.areaAddress ?? '',
+      latitude:
+        technician.latitude != null && technician.latitude !== '' ? String(technician.latitude) : '',
+      longitude:
+        technician.longitude != null && technician.longitude !== '' ? String(technician.longitude) : '',
+      serviceRadius:
+        technician.serviceRadius != null && technician.serviceRadius !== ''
+          ? String(technician.serviceRadius)
+          : '10',
+      completedBookings: technician.completedBookings ?? 0,
+      pendingBookings: technician.pendingBookings ?? 0,
     })
     setOpen(true)
   }
@@ -115,6 +141,24 @@ export function TechniciansPage() {
             </div>
             <div className="mt-4 grid gap-3 text-sm text-slate-600 dark:text-slate-300">
               <p>Phone: {technician.phone}</p>
+              <p>
+                Service area: {technician.areaAddress?.trim() ? technician.areaAddress : '—'}
+              </p>
+              <p>
+                Radius:{' '}
+                {Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : 10} km
+                {technician.latitude != null &&
+                technician.longitude != null &&
+                Number.isFinite(Number(technician.latitude)) &&
+                Number.isFinite(Number(technician.longitude)) ? (
+                  <span className="text-slate-500 dark:text-slate-400">
+                    {' '}
+                    • {Number(technician.latitude).toFixed(4)}, {Number(technician.longitude).toFixed(4)}
+                  </span>
+                ) : (
+                  <span className="ml-1 text-amber-700 dark:text-amber-300"> • Set lat/lng for geo assign</span>
+                )}
+              </p>
               <p>Completed: {stats.completed}</p>
               <p>Pending: {stats.pending}</p>
               <p className="font-semibold text-emerald-600 dark:text-emerald-300">
@@ -176,6 +220,42 @@ export function TechniciansPage() {
               <Input value={form.skills} onChange={(event) => setForm({ ...form, skills: event.target.value })} />
             </Field>
           </div>
+          <div className="md:col-span-2">
+            <Field label="Area address (service base)">
+              <Input
+                value={form.areaAddress}
+                onChange={(event) => setForm({ ...form, areaAddress: event.target.value })}
+                placeholder="e.g. Connaught Place, New Delhi"
+              />
+            </Field>
+          </div>
+          <Field label="Latitude (WGS84)">
+            <Input
+              type="number"
+              step="any"
+              value={form.latitude}
+              onChange={(event) => setForm({ ...form, latitude: event.target.value })}
+              placeholder="Required for distance-based assignment"
+            />
+          </Field>
+          <Field label="Longitude (WGS84)">
+            <Input
+              type="number"
+              step="any"
+              value={form.longitude}
+              onChange={(event) => setForm({ ...form, longitude: event.target.value })}
+              placeholder="Required for distance-based assignment"
+            />
+          </Field>
+          <Field label="Service radius (km)">
+            <Input
+              type="number"
+              min="1"
+              step="0.1"
+              value={form.serviceRadius}
+              onChange={(event) => setForm({ ...form, serviceRadius: event.target.value })}
+            />
+          </Field>
           <div className="md:col-span-2 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setOpen(false)}>
               Cancel
