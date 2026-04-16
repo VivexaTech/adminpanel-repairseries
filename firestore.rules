@@ -85,6 +85,17 @@ service cloud.firestore {
       }
     }
 
+    // Queued by admin panel; Cloud Function sends FCM (admin SDK bypasses these rules).
+    match /bookingNotificationOutbox/{docId} {
+      allow create: if isSuperAdmin() || isBookingManager();
+      allow read, update, delete: if false;
+    }
+
+    match /faqs/{docId} {
+      allow read: if isSuperAdmin() || isBookingManager();
+      allow write: if isSuperAdmin();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

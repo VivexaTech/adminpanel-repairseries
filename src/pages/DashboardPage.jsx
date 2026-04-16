@@ -124,7 +124,7 @@ export function DashboardPage() {
                     tone={
                       booking.status === 'Completed'
                         ? 'success'
-                        : booking.status === 'Assigned'
+                        : booking.status === 'Assigned' || booking.status === 'Started'
                           ? 'info'
                           : 'warning'
                     }

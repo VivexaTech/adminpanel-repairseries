@@ -56,7 +56,7 @@ export function TechniciansPage() {
       if (booking.status === 'Completed') {
         stats[techId].completed += 1
         stats[techId].earnings += amount
-      } else if (['Assigned', 'New', 'Pending'].includes(booking.status)) {
+      } else if (['Assigned', 'New', 'Pending', 'Started'].includes(booking.status)) {
         stats[techId].pending += 1
       }
     }

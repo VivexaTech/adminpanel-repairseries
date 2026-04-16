@@ -16,6 +16,7 @@ import {
   updateDocFields,
   upsertDoc,
 } from '../services/firestore'
+import { enqueueBookingNotification } from '../services/bookingNotifications'
 import { geocodeAddressString } from '../services/geocode'
 import { playChatMessageSound, playNewBookingSiren, preloadAlertSounds } from '../utils/alertSounds'
 import { formatBookingAddressForDisplay, normalizeBookingAddressForStorage } from '../utils/bookingAddress'
@@ -31,6 +32,7 @@ const ROLE_BINDINGS = {
     { key: 'bookings', collectionName: 'bookings' },
     { key: 'services', collectionName: 'services' },
     { key: 'categories', collectionName: 'categories' },
+    { key: 'faqs', collectionName: 'faqs' },
     { key: 'supportChats', collectionName: 'supportChats' },
     { key: 'adminUsers', collectionName: 'adminUsers' },
   ],
@@ -53,6 +55,7 @@ const EMPTY_DATA = {
   bookings: [],
   services: [],
   categories: [],
+  faqs: [],
   supportChats: [],
   adminUsers: [],
 }
@@ -63,6 +66,7 @@ const IDLE_LOADING = {
   bookings: false,
   services: false,
   categories: false,
+  faqs: false,
   supportChats: false,
   adminUsers: false,
 }
@@ -79,6 +83,7 @@ export function AppProvider({ children }) {
     bookings: true,
     services: true,
     categories: true,
+    faqs: true,
     supportChats: true,
     adminUsers: true,
   })
@@ -89,6 +94,7 @@ export function AppProvider({ children }) {
     bookings: [],
     services: [],
     categories: [],
+    faqs: [],
     supportChats: [],
     adminUsers: [],
   })
@@ -326,7 +332,7 @@ export function AppProvider({ children }) {
       (booking) =>
         booking.id !== ignoreBookingId &&
         booking.technicianId === technicianId &&
-        ['Assigned', 'Pending', 'New'].includes(booking.status),
+        ['Assigned', 'Pending', 'New', 'Started'].includes(booking.status),
     )
 
   const upsertTechnician = async (technician) => {
@@ -389,19 +395,54 @@ export function AppProvider({ children }) {
       throw new Error('This technician has an active booking. Assign only after completion.')
     }
 
+    const booking = data.bookings.find((b) => b.id === bookingId)
+    if (!booking) throw new Error('Booking not found.')
+
     await withMutating('bookingAssign', async () => {
-      const booking = data.bookings.find((b) => b.id === bookingId)
-      if (!booking) throw new Error('Booking not found.')
       const technician = data.technicians.find((t) => t.id === technicianId)
       if (!technician) throw new Error('Technician not found.')
       await updateDocFields('bookings', bookingId, { technicianId, status: 'Assigned' })
     })
     toast.success('Technician assigned.')
+
+    try {
+      await enqueueBookingNotification({
+        customerId: booking.customerId,
+        bookingId,
+        eventType: 'assigned',
+        serviceName: booking.serviceName || '',
+      })
+    } catch (err) {
+      console.error('[FCM queue] assign', err)
+      toast.warning('Assignment saved; push notification could not be queued.')
+    }
   }
 
   const updateBookingStatus = async ({ bookingId, status }) => {
+    const booking = data.bookings.find((b) => b.id === bookingId)
+
     await withMutating('bookingStatus', async () => updateDocFields('bookings', bookingId, { status }))
     toast.success('Booking updated.')
+
+    if (!booking?.customerId) return
+    const eventType =
+      status === 'Completed'
+        ? 'completed'
+        : status === 'Started' || status === 'Pending'
+          ? 'started'
+          : null
+    if (!eventType) return
+    try {
+      await enqueueBookingNotification({
+        customerId: booking.customerId,
+        bookingId,
+        eventType,
+        serviceName: booking.serviceName || '',
+      })
+    } catch (err) {
+      console.error('[FCM queue] status', err)
+      toast.warning('Status saved; push notification could not be queued.')
+    }
   }
 
   const createBooking = async (booking) => {
@@ -409,6 +450,7 @@ export function AppProvider({ children }) {
       throw new Error('Selected technician is already handling another booking.')
     }
 
+    let newBookingId = ''
     await withMutating('bookingCreate', async () => {
       const scheduledAtDate = booking.scheduledAt instanceof Date ? booking.scheduledAt : new Date(booking.scheduledAt)
       if (Number.isNaN(scheduledAtDate.getTime())) throw new Error('Invalid booking date/time.')
@@ -446,10 +488,32 @@ export function AppProvider({ children }) {
           : {}),
       }
 
-      const id = await createDoc('bookings', payload)
-      await upsertDoc('bookings', id, { bookingCode: `BK-${id.slice(-6).toUpperCase()}` })
+      newBookingId = await createDoc('bookings', payload)
+      await upsertDoc('bookings', newBookingId, { bookingCode: `BK-${newBookingId.slice(-6).toUpperCase()}` })
     })
     toast.success('Booking created.')
+
+    if (newBookingId && booking.customerId) {
+      try {
+        await enqueueBookingNotification({
+          customerId: booking.customerId,
+          bookingId: newBookingId,
+          eventType: 'created',
+          serviceName: booking.serviceName || '',
+        })
+        if (booking.technicianId) {
+          await enqueueBookingNotification({
+            customerId: booking.customerId,
+            bookingId: newBookingId,
+            eventType: 'assigned',
+            serviceName: booking.serviceName || '',
+          })
+        }
+      } catch (err) {
+        console.error('[FCM queue] create', err)
+        toast.warning('Booking saved; push notification could not be queued.')
+      }
+    }
   }
 
   const backfillMissingBookingCoordinates = async () => {
@@ -489,6 +553,23 @@ export function AppProvider({ children }) {
 
   const upsertService = async (service) => {
     await withMutating('service', async () => {
+      const brands = Array.isArray(service.brands)
+        ? service.brands
+            .filter((b) => b && String(b.name || '').trim() && String(b.logoImage || '').trim())
+            .map((b) => ({ name: String(b.name).trim(), logoImage: String(b.logoImage).trim() }))
+        : []
+      const processSteps = Array.isArray(service.processSteps)
+        ? service.processSteps
+            .filter((s) => s && String(s.title || '').trim() && String(s.description || '').trim())
+            .map((s) => ({
+              title: String(s.title).trim(),
+              description: String(s.description).trim(),
+              image: String(s.image || '').trim(),
+            }))
+        : []
+      const homeImage = String(service.homeImage || service.imageUrl || '').trim()
+      const listImage = String(service.listImage || '').trim() || homeImage
+      const detailImage = String(service.detailImage || '').trim() || homeImage
       const payload = {
         name: service.name,
         description: service.description,
@@ -497,7 +578,12 @@ export function AppProvider({ children }) {
         duration: Number(service.duration || 0),
         categoryId: service.categoryId || '',
         extraPoint: service.extraPoint || '',
-        imageUrl: service.imageUrl || '',
+        imageUrl: homeImage || String(service.imageUrl || '').trim(),
+        homeImage,
+        listImage,
+        detailImage,
+        brands,
+        processSteps,
         status: service.status || 'Active',
       }
       if (service.id) await upsertDoc('services', service.id, payload)
@@ -523,6 +609,24 @@ export function AppProvider({ children }) {
   const deleteCategory = async (categoryId) => {
     await withMutating('categoryDelete', async () => removeDoc('categories', categoryId))
     toast.success('Category deleted.')
+  }
+
+  const upsertFaq = async (faq) => {
+    const question = String(faq.question || '').trim()
+    const answer = String(faq.answer || '').trim()
+    if (!question) throw new Error('FAQ question is required.')
+    if (!answer) throw new Error('FAQ answer is required.')
+    await withMutating('faq', async () => {
+      const payload = { question, answer }
+      if (faq.id) await upsertDoc('faqs', faq.id, payload)
+      else await createDoc('faqs', payload)
+    })
+    toast.success('FAQ saved.')
+  }
+
+  const deleteFaq = async (faqId) => {
+    await withMutating('faqDelete', async () => removeDoc('faqs', faqId))
+    toast.success('FAQ removed.')
   }
 
   const createAdminUser = async ({ email, password, name, role }) => {
@@ -571,7 +675,7 @@ export function AppProvider({ children }) {
   const metrics = useMemo(() => {
     const completed = data.bookings.filter((booking) => isBookingCompleted(booking))
     const pending = data.bookings.filter((booking) =>
-      ['Pending', 'New', 'Assigned'].includes(booking.status),
+      ['Pending', 'New', 'Assigned', 'Started'].includes(booking.status),
     )
     const todayKey = new Date().toDateString()
     const todayBookings = data.bookings.filter(
@@ -616,6 +720,8 @@ export function AppProvider({ children }) {
     deleteService,
     upsertCategory,
     deleteCategory,
+    upsertFaq,
+    deleteFaq,
     createAdminUser,
     updateAdminUser,
   }

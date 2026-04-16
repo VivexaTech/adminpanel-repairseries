@@ -14,7 +14,7 @@ import {
 import { ROLES } from '../utils/rbac'
 import { getBookingsForDay } from '../services/firestore'
 
-const statusPriority = { New: 1, Assigned: 2, Pending: 3, Completed: 4 }
+const statusPriority = { New: 1, Assigned: 2, Started: 3, Pending: 3, Completed: 5 }
 
 export function BookingsPage() {
   const {
@@ -88,7 +88,7 @@ export function BookingsPage() {
     () =>
       new Set(
         bookings
-          .filter((booking) => ['Assigned', 'Pending', 'New'].includes(booking.status))
+          .filter((booking) => ['Assigned', 'Pending', 'New', 'Started'].includes(booking.status))
           .map((booking) => booking.technicianId)
           .filter(Boolean),
       ),
@@ -137,7 +137,7 @@ export function BookingsPage() {
         const targetEnd = targetStart + durationMinutes * 60_000
 
         dayBookings
-          .filter((b) => ['Assigned', 'Pending', 'New'].includes(b.status))
+          .filter((b) => ['Assigned', 'Pending', 'New', 'Started'].includes(b.status))
           .filter((b) => b.technicianId)
           .forEach((b) => {
             const startMs = b.scheduledAt?.toDate?.()
@@ -200,7 +200,7 @@ export function BookingsPage() {
         const targetEnd = targetStart + targetDuration * 60_000
 
         dayBookings
-          .filter((b) => ['Assigned', 'Pending', 'New'].includes(b.status))
+          .filter((b) => ['Assigned', 'Pending', 'New', 'Started'].includes(b.status))
           .filter((b) => b.technicianId)
           .forEach((b) => {
             const start = b.scheduledAt?.toDate?.()
@@ -310,9 +310,11 @@ export function BookingsPage() {
                       ? 'success'
                       : booking.status === 'Assigned'
                         ? 'info'
-                        : booking.status === 'Pending'
-                          ? 'neutral'
-                          : 'warning'
+                        : booking.status === 'Started'
+                          ? 'info'
+                          : booking.status === 'Pending'
+                            ? 'neutral'
+                            : 'warning'
                   }
                 >
                   {booking.status || 'Unknown'}
@@ -352,18 +354,24 @@ export function BookingsPage() {
               >
                 Assign Technician
               </Button>
-              <Button
-                variant="ghost"
-                onClick={() =>
-                  updateBookingStatus({
-                    bookingId: booking.id,
-                    status: booking.status === 'Completed' ? 'Assigned' : 'Completed',
-                  })
-                }
-                disabled={Boolean(mutating.bookingStatus)}
-              >
-                Mark {booking.status === 'Completed' ? 'Assigned' : 'Completed'}
-              </Button>
+              {booking.status === 'Assigned' ? (
+                <Button
+                  variant="secondary"
+                  disabled={Boolean(mutating.bookingStatus)}
+                  onClick={() => updateBookingStatus({ bookingId: booking.id, status: 'Started' })}
+                >
+                  Mark started
+                </Button>
+              ) : null}
+              {booking.status !== 'Completed' && booking.status !== 'New' ? (
+                <Button
+                  variant="ghost"
+                  disabled={Boolean(mutating.bookingStatus)}
+                  onClick={() => updateBookingStatus({ bookingId: booking.id, status: 'Completed' })}
+                >
+                  Mark completed
+                </Button>
+              ) : null}
             </div>
           </Card>
         ))}
