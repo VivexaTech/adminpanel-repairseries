@@ -18,11 +18,15 @@ import {
 } from '../services/firestore'
 import { enqueueBookingNotification } from '../services/bookingNotifications'
 import { geocodeAddressString } from '../services/geocode'
-import { playChatMessageSound, playNewBookingSiren, preloadAlertSounds } from '../utils/alertSounds'
+import { playNewBookingSiren, preloadAlertSounds } from '../utils/alertSounds'
 import { formatBookingAddressForDisplay, normalizeBookingAddressForStorage } from '../utils/bookingAddress'
 import { getBookingLatLng, parseCoord } from '../utils/geo'
-import { getBookingAmount, isBookingCompleted } from '../utils/helpers'
-import { ROLES } from '../utils/rbac'
+import {
+  getBookingEarningSplit,
+  isBookingCompleted,
+  isBookingRevenueCounted,
+} from '../utils/helpers'
+import { ASSIGNABLE_ROLES, ROLES } from '../utils/rbac'
 import { markSoundPlayed, wasSoundPlayed } from '../utils/soundDedupe'
 
 const ROLE_BINDINGS = {
@@ -33,7 +37,8 @@ const ROLE_BINDINGS = {
     { key: 'services', collectionName: 'services' },
     { key: 'categories', collectionName: 'categories' },
     { key: 'faqs', collectionName: 'faqs' },
-    { key: 'supportChats', collectionName: 'supportChats' },
+    { key: 'offers', collectionName: 'offers' },
+    { key: 'coupons', collectionName: 'coupons' },
     { key: 'adminUsers', collectionName: 'adminUsers' },
   ],
   [ROLES.BOOKING_MANAGER]: [
@@ -46,7 +51,13 @@ const ROLE_BINDINGS = {
     { key: 'technicians', collectionName: 'technicians' },
     { key: 'bookings', collectionName: 'bookings' },
   ],
-  [ROLES.SUPPORT_MANAGER]: [{ key: 'supportChats', collectionName: 'supportChats' }],
+  [ROLES.SERVICE_MANAGER]: [
+    { key: 'services', collectionName: 'services' },
+    { key: 'categories', collectionName: 'categories' },
+    { key: 'offers', collectionName: 'offers' },
+    { key: 'coupons', collectionName: 'coupons' },
+    { key: 'faqs', collectionName: 'faqs' },
+  ],
 }
 
 const EMPTY_DATA = {
@@ -56,7 +67,8 @@ const EMPTY_DATA = {
   services: [],
   categories: [],
   faqs: [],
-  supportChats: [],
+  offers: [],
+  coupons: [],
   adminUsers: [],
 }
 
@@ -67,7 +79,8 @@ const IDLE_LOADING = {
   services: false,
   categories: false,
   faqs: false,
-  supportChats: false,
+  offers: false,
+  coupons: false,
   adminUsers: false,
 }
 
@@ -84,7 +97,8 @@ export function AppProvider({ children }) {
     services: true,
     categories: true,
     faqs: true,
-    supportChats: true,
+    offers: true,
+    coupons: true,
     adminUsers: true,
   })
   const [mutating, setMutating] = useState({})
@@ -95,13 +109,12 @@ export function AppProvider({ children }) {
     services: [],
     categories: [],
     faqs: [],
-    supportChats: [],
+    offers: [],
+    coupons: [],
     adminUsers: [],
   })
   const bookingsBootstrapped = useRef(false)
-  const supportChatLastTs = useRef({})
   const profileUnsubRef = useRef(null)
-  const [supportReadVersion, setSupportReadVersion] = useState(0)
 
   useEffect(() => {
     document.body.classList.toggle('dark', theme === 'dark')
@@ -254,58 +267,6 @@ export function AppProvider({ children }) {
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe())
   }, [session?.id, session?.role])
 
-  useEffect(() => {
-    const prev = supportChatLastTs.current
-    const next = {}
-    data.supportChats.forEach((chat) => {
-      const ts = chat.lastMessageAt?.toMillis?.() || 0
-      next[chat.id] = ts
-      const oldTs = prev[chat.id] ?? 0
-      if (Object.keys(prev).length > 0 && ts > oldTs && chat.lastSenderRole === 'user') {
-        const key = `support-msg-${chat.id}-${ts}`
-        if (!wasSoundPlayed(key)) {
-          markSoundPlayed(key)
-          playChatMessageSound()
-        }
-        toast.message('New support message', {
-          description: chat.userName || chat.userId || chat.id,
-        })
-      }
-    })
-    if (Object.keys(prev).length === 0) {
-      supportChatLastTs.current = next
-      return
-    }
-    supportChatLastTs.current = next
-  }, [data.supportChats])
-
-  const getSupportReadMillis = (chatId) => {
-    try {
-      return Number(localStorage.getItem(`repair-series-support-read-${chatId}`) || 0)
-    } catch {
-      return 0
-    }
-  }
-
-  const markSupportChatRead = (chatId, lastMessageMillis = Date.now()) => {
-    try {
-      localStorage.setItem(`repair-series-support-read-${chatId}`, String(lastMessageMillis))
-    } catch {
-      // ignore
-    }
-    setSupportReadVersion((v) => v + 1)
-  }
-
-  const supportUnreadTotal = useMemo(() => {
-    let n = 0
-    for (const chat of data.supportChats) {
-      const lastAt = chat.lastMessageAt?.toMillis?.() || 0
-      const readAt = getSupportReadMillis(chat.id)
-      if (chat.lastSenderRole === 'user' && lastAt > readAt) n += 1
-    }
-    return n
-  }, [data.supportChats, supportReadVersion])
-
   const login = async ({ email, password }) => {
     if (!isFirebaseConfigured || !auth) throw new Error('Firebase is not configured.')
     await signInWithEmailAndPassword(auth, email, password)
@@ -390,6 +351,30 @@ export function AppProvider({ children }) {
     toast.success('Customer created.')
   }
 
+  const updateCustomerDetails = async ({ customerId, name, phone, role }) => {
+    if (session?.role !== ROLES.SUPER_ADMIN) {
+      throw new Error('Only Super Admins can update customer details.')
+    }
+    const trimmedName = String(name || '').trim()
+    const trimmedPhone = String(phone || '').trim().replace(/\s+/g, '')
+    const trimmedRole = String(role || '').trim()
+    if (!trimmedName) throw new Error('Name is required.')
+    if (!/^\+?[0-9]{10,15}$/.test(trimmedPhone)) {
+      throw new Error('Phone must be 10–15 digits (optional +).')
+    }
+    const dup = data.customers.some((c) => c.id !== customerId && String(c.phone || '').trim() === trimmedPhone)
+    if (dup) throw new Error('Another customer already uses this phone number.')
+
+    await withMutating('customerUpdate', async () =>
+      updateDocFields('customers', customerId, {
+        name: trimmedName,
+        phone: trimmedPhone,
+        role: trimmedRole,
+      }),
+    )
+    toast.success('Customer updated.')
+  }
+
   const assignTechnician = async ({ bookingId, technicianId }) => {
     if (hasActiveBooking(technicianId, bookingId)) {
       throw new Error('This technician has an active booking. Assign only after completion.')
@@ -451,9 +436,68 @@ export function AppProvider({ children }) {
     }
 
     let newBookingId = ''
+    let autoAssigned = { technicianId: null, assigned: false, status: 'Pending' }
     await withMutating('bookingCreate', async () => {
       const scheduledAtDate = booking.scheduledAt instanceof Date ? booking.scheduledAt : new Date(booking.scheduledAt)
       if (Number.isNaN(scheduledAtDate.getTime())) throw new Error('Invalid booking date/time.')
+
+      const service =
+        booking.serviceId ? data.services.find((s) => s.id === booking.serviceId) : null
+      const servicePrice = Number(service?.price ?? booking.amount ?? 0)
+      const visitingCharge = Number(service?.visitingCharge ?? booking.visitingCharge ?? 0)
+      if (!Number.isFinite(servicePrice) || servicePrice < 0) throw new Error('Invalid service price.')
+      if (!Number.isFinite(visitingCharge) || visitingCharge < 0) throw new Error('Invalid visiting charge.')
+      const totalAmount = servicePrice + visitingCharge
+      const technicianEarning = Math.round(totalAmount * 0.7)
+      const platformCommission = totalAmount - technicianEarning
+
+      const getTimeRangeMs = (b) => {
+        const startDate = b?.scheduledAt?.toDate?.()
+          ? b.scheduledAt.toDate()
+          : b?.dateTime
+            ? new Date(b.dateTime)
+            : b?.scheduledAt instanceof Date
+              ? b.scheduledAt
+              : b?.scheduledAt
+                ? new Date(b.scheduledAt)
+                : null
+        if (!startDate || Number.isNaN(startDate.getTime())) return null
+        const duration = Number(b.durationMinutes ?? b.duration ?? 60)
+        const start = startDate.getTime()
+        return { start, end: start + duration * 60_000 }
+      }
+      const overlaps = (a, b) => a.start < b.end && a.end > b.start
+
+      const tryAutoAssign = () => {
+        if (booking.technicianId) return { technicianId: booking.technicianId, assigned: true, status: 'Assigned' }
+        const target = { start: scheduledAtDate.getTime(), end: scheduledAtDate.getTime() + Number(booking.durationMinutes || 60) * 60_000 }
+        const activeStatuses = new Set(['Assigned', 'Pending', 'New', 'Started'])
+        const candidates = data.technicians.filter((t) => t.status === 'Available')
+        const scored = []
+        for (const tech of candidates) {
+          const techBookings = data.bookings
+            .filter((b) => b.technicianId === tech.id && activeStatuses.has(b.status))
+          const conflicts = techBookings.some((b) => {
+            const r = getTimeRangeMs(b)
+            if (!r) return false
+            return overlaps(target, r)
+          })
+          if (conflicts) continue
+          // least-busy heuristic: count active bookings on same day
+          const dayKey = scheduledAtDate.toDateString()
+          const busyCount = techBookings.filter((b) => {
+            const r = getTimeRangeMs(b)
+            if (!r) return false
+            return new Date(r.start).toDateString() === dayKey
+          }).length
+          scored.push({ techId: tech.id, busyCount })
+        }
+        if (!scored.length) return { technicianId: null, assigned: false, status: 'Pending' }
+        scored.sort((a, b) => a.busyCount - b.busyCount)
+        return { technicianId: scored[0].techId, assigned: true, status: 'Assigned' }
+      }
+
+      autoAssigned = tryAutoAssign()
 
       const normalizedAddr = normalizeBookingAddressForStorage(booking.address)
       const addrForGeo = formatBookingAddressForDisplay(normalizedAddr)
@@ -480,9 +524,15 @@ export function AppProvider({ children }) {
         notes: booking.notes || '',
         scheduledAt: Timestamp.fromDate(scheduledAtDate),
         durationMinutes: Number(booking.durationMinutes || 60),
-        amount: Number(booking.amount || 0),
-        technicianId: booking.technicianId || null,
-        status: booking.technicianId ? 'Assigned' : 'New',
+        amount: servicePrice,
+        visitingCharge,
+        totalAmount,
+        finalAmount: totalAmount,
+        technicianEarning,
+        platformCommission,
+        technicianId: autoAssigned.technicianId || null,
+        status: autoAssigned.status,
+        ...(autoAssigned.assigned ? { assignedAt: serverTimestamp() } : {}),
         ...(lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
           ? { latitude: lat, longitude: lng }
           : {}),
@@ -501,7 +551,7 @@ export function AppProvider({ children }) {
           eventType: 'created',
           serviceName: booking.serviceName || '',
         })
-        if (booking.technicianId) {
+        if (autoAssigned.assigned) {
           await enqueueBookingNotification({
             customerId: booking.customerId,
             bookingId: newBookingId,
@@ -570,11 +620,16 @@ export function AppProvider({ children }) {
       const homeImage = String(service.homeImage || service.imageUrl || '').trim()
       const listImage = String(service.listImage || '').trim() || homeImage
       const detailImage = String(service.detailImage || '').trim() || homeImage
+      const visitingCharge = Number(service.visitingCharge || 0)
+      if (!Number.isFinite(visitingCharge) || visitingCharge < 0) {
+        throw new Error('Visiting charge must be a number (0 or more).')
+      }
       const payload = {
         name: service.name,
         description: service.description,
         keyPoints: service.keyPoints?.filter(Boolean) || [],
         price: Number(service.price || 0),
+        visitingCharge,
         duration: Number(service.duration || 0),
         categoryId: service.categoryId || '',
         extraPoint: service.extraPoint || '',
@@ -629,14 +684,99 @@ export function AppProvider({ children }) {
     toast.success('FAQ removed.')
   }
 
-  const createAdminUser = async ({ email, password, name, role }) => {
+  const upsertOffer = async (offer) => {
+    if (session?.role !== ROLES.SUPER_ADMIN) throw new Error('Only Super Admins can manage offers.')
+    const image = String(offer.image || '').trim()
+    if (!image) throw new Error('Offer image is required.')
+    const title = String(offer.title || '').trim()
+    const active = Boolean(offer.active)
+    await withMutating('offer', async () => {
+      const payload = { image, title, active }
+      if (offer.id) await upsertDoc('offers', offer.id, payload)
+      else await createDoc('offers', payload)
+    })
+    toast.success('Offer saved.')
+  }
+
+  const deleteOffer = async (offerId) => {
+    if (session?.role !== ROLES.SUPER_ADMIN) throw new Error('Only Super Admins can manage offers.')
+    await withMutating('offerDelete', async () => removeDoc('offers', offerId))
+    toast.success('Offer removed.')
+  }
+
+  const upsertCoupon = async (coupon) => {
+    if (session?.role !== ROLES.SUPER_ADMIN) throw new Error('Only Super Admins can manage coupons.')
+    const code = String(coupon.code || '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '')
+    if (!code) throw new Error('Coupon code is required.')
+
+    const discountType = coupon.discountType === 'percentage' ? 'percentage' : 'flat'
+    const discountValue = Number(coupon.discountValue)
+    if (!Number.isFinite(discountValue) || discountValue <= 0) throw new Error('Discount value must be > 0.')
+
+    const minOrderAmount = Number(coupon.minOrderAmount || 0)
+    if (!Number.isFinite(minOrderAmount) || minOrderAmount < 0) throw new Error('Min order must be 0 or more.')
+
+    const maxDiscount =
+      coupon.maxDiscount === '' || coupon.maxDiscount == null ? null : Number(coupon.maxDiscount)
+    if (maxDiscount != null && (!Number.isFinite(maxDiscount) || maxDiscount <= 0)) {
+      throw new Error('Max discount must be empty or > 0.')
+    }
+
+    const expiryDate = coupon.expiryDate ? new Date(coupon.expiryDate) : null
+    if (!expiryDate || Number.isNaN(expiryDate.getTime())) throw new Error('Expiry date is required.')
+
+    const active = Boolean(coupon.active)
+
+    await withMutating('coupon', async () => {
+      const payload = {
+        code,
+        discountType,
+        discountValue,
+        minOrderAmount,
+        ...(maxDiscount != null ? { maxDiscount } : {}),
+        expiryDate: Timestamp.fromDate(expiryDate),
+        active,
+      }
+      if (coupon.id) await upsertDoc('coupons', coupon.id, payload)
+      else await createDoc('coupons', payload)
+    })
+    toast.success('Coupon saved.')
+  }
+
+  const deleteCoupon = async (couponId) => {
+    if (session?.role !== ROLES.SUPER_ADMIN) throw new Error('Only Super Admins can manage coupons.')
+    await withMutating('couponDelete', async () => removeDoc('coupons', couponId))
+    toast.success('Coupon removed.')
+  }
+
+  const normalizePhone = (value) => String(value || '').trim().replace(/\s+/g, '')
+
+  const createAdminUser = async ({ email, password, name, phone, role }) => {
     if (session?.role !== ROLES.SUPER_ADMIN) {
       throw new Error('Only Super Admins can manage users.')
     }
     if (!secondaryAuth || !db) throw new Error('Firebase is not configured.')
     const trimmedEmail = email.trim().toLowerCase()
     const trimmedName = name.trim()
-    if (!trimmedEmail || !password || !trimmedName) throw new Error('Name, email, and password are required.')
+    const trimmedPhone = normalizePhone(phone)
+    if (!trimmedEmail || !password || !trimmedName || !trimmedPhone) {
+      throw new Error('Name, email, phone, and password are required.')
+    }
+    if (!/^\+?[0-9]{10,15}$/.test(trimmedPhone)) {
+      throw new Error('Phone must be 10–15 digits (optional +).')
+    }
+    if (role === ROLES.SUPER_ADMIN) {
+      const existing = data.adminUsers.filter((u) => u.role === ROLES.SUPER_ADMIN)
+      if (existing.length > 0) {
+        throw new Error('Only one Super Admin is allowed. Demote the existing Super Admin first.')
+      }
+    }
+    if (!ASSIGNABLE_ROLES.includes(role)) {
+      throw new Error('Invalid role.')
+    }
 
     await withMutating('adminUserCreate', async () => {
       const cred = await createUserWithEmailAndPassword(secondaryAuth, trimmedEmail, password)
@@ -644,6 +784,7 @@ export function AppProvider({ children }) {
       await setDoc(doc(db, 'adminUsers', cred.user.uid), {
         name: trimmedName,
         email: trimmedEmail,
+        phone: trimmedPhone,
         role,
         status: 'active',
         createdAt: serverTimestamp(),
@@ -664,8 +805,29 @@ export function AppProvider({ children }) {
       }
     }
     const payload = {}
-    if (fields.role != null) payload.role = fields.role
+    if (fields.role != null) {
+      if (!ASSIGNABLE_ROLES.includes(fields.role)) {
+        throw new Error('Invalid role.')
+      }
+      if (fields.role === ROLES.SUPER_ADMIN) {
+        const existing = data.adminUsers.filter((u) => u.role === ROLES.SUPER_ADMIN && u.id !== userId)
+        if (existing.length > 0) {
+          throw new Error('Only one Super Admin is allowed.')
+        }
+      }
+      payload.role = fields.role
+    }
     if (fields.status != null) payload.status = fields.status
+    if (fields.phone != null) {
+      const nextPhone = normalizePhone(fields.phone)
+      if (!/^\+?[0-9]{10,15}$/.test(nextPhone)) throw new Error('Phone must be 10–15 digits (optional +).')
+      payload.phone = nextPhone
+    }
+    if (fields.name != null) {
+      const nextName = String(fields.name || '').trim()
+      if (!nextName) throw new Error('Name is required.')
+      payload.name = nextName
+    }
     if (Object.keys(payload).length === 0) return
 
     await withMutating('adminUserUpdate', async () => updateDocFields('adminUsers', userId, payload))
@@ -685,11 +847,15 @@ export function AppProvider({ children }) {
         return new Date(raw).toDateString() === todayKey
       },
     )
-    const totalEarnings = completed.reduce((total, booking) => total + getBookingAmount(booking), 0)
+    const revenueBookings = data.bookings.filter((booking) => isBookingRevenueCounted(booking))
+    const platformEarnings = revenueBookings.reduce((total, booking) => {
+      const { platformCut } = getBookingEarningSplit(booking)
+      return total + platformCut
+    }, 0)
     return {
       totalOrdersCompleted: completed.length,
       pendingBookings: pending.length,
-      totalEarnings,
+      platformEarnings,
       todaysBookings: todayBookings.length,
     }
   }, [data.bookings])
@@ -703,8 +869,6 @@ export function AppProvider({ children }) {
     authLoading,
     loading,
     mutating,
-    supportUnreadTotal,
-    markSupportChatRead,
     login,
     logout,
     upsertTechnician,
@@ -712,6 +876,7 @@ export function AppProvider({ children }) {
     toggleCustomerBlock,
     deleteCustomer,
     createCustomer,
+    updateCustomerDetails,
     assignTechnician,
     updateBookingStatus,
     createBooking,
@@ -722,6 +887,10 @@ export function AppProvider({ children }) {
     deleteCategory,
     upsertFaq,
     deleteFaq,
+    upsertOffer,
+    deleteOffer,
+    upsertCoupon,
+    deleteCoupon,
     createAdminUser,
     updateAdminUser,
   }

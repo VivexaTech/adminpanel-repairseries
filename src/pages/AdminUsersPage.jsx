@@ -23,11 +23,14 @@ export function AdminUsersPage() {
   const [addForm, setAddForm] = useState({
     name: '',
     email: '',
+    phone: '',
     password: '',
     role: ROLES.BOOKING_MANAGER,
   })
   const [editOpen, setEditOpen] = useState(false)
   const [editUser, setEditUser] = useState(null)
+  const [editName, setEditName] = useState('')
+  const [editPhone, setEditPhone] = useState('')
   const [editRole, setEditRole] = useState(ROLES.BOOKING_MANAGER)
 
   const sorted = useMemo(
@@ -40,6 +43,14 @@ export function AdminUsersPage() {
     [adminUsers],
   )
 
+  const editRoleOptions = useMemo(() => {
+    const role = editUser?.role
+    if (role && !ASSIGNABLE_ROLES.includes(role)) {
+      return [...ASSIGNABLE_ROLES, role]
+    }
+    return ASSIGNABLE_ROLES
+  }, [editUser?.role])
+
   const canManage = session?.role === ROLES.SUPER_ADMIN
 
   const submitAdd = async (e) => {
@@ -48,10 +59,16 @@ export function AdminUsersPage() {
       toast.error('Only Super Admins can manage users.')
       return
     }
+    const phone = String(addForm.phone || '').trim()
+    if (!/^\+?[0-9]{10,15}$/.test(phone)) {
+      toast.error('Enter a valid phone number (10–15 digits, optional +).')
+      return
+    }
     try {
       await createAdminUser({
         name: addForm.name,
         email: addForm.email,
+        phone,
         password: addForm.password,
         role: addForm.role,
       })
@@ -59,6 +76,7 @@ export function AdminUsersPage() {
       setAddForm({
         name: '',
         email: '',
+        phone: '',
         password: '',
         role: ROLES.BOOKING_MANAGER,
       })
@@ -69,6 +87,8 @@ export function AdminUsersPage() {
 
   const openEdit = (user) => {
     setEditUser(user)
+    setEditName(user.name || '')
+    setEditPhone(user.phone || '')
     setEditRole(user.role || ROLES.BOOKING_MANAGER)
     setEditOpen(true)
   }
@@ -76,10 +96,22 @@ export function AdminUsersPage() {
   const saveRole = async (e) => {
     e.preventDefault()
     if (!editUser || !canManage) return
+    const name = String(editName || '').trim()
+    const phone = String(editPhone || '').trim().replace(/\s+/g, '')
+    if (!name) {
+      toast.error('Name is required.')
+      return
+    }
+    if (!/^\+?[0-9]{10,15}$/.test(phone)) {
+      toast.error('Enter a valid phone number (10–15 digits, optional +).')
+      return
+    }
     try {
-      await updateAdminUser(editUser.id, { role: editRole })
+      await updateAdminUser(editUser.id, { name, phone, role: editRole })
       setEditOpen(false)
       setEditUser(null)
+      setEditName('')
+      setEditPhone('')
     } catch (err) {
       toast.error(err.message)
     }
@@ -130,6 +162,7 @@ export function AdminUsersPage() {
               <tr>
                 <th className="px-4 py-3 font-medium">Name</th>
                 <th className="px-4 py-3 font-medium">Email</th>
+                <th className="px-4 py-3 font-medium">Phone</th>
                 <th className="px-4 py-3 font-medium">Role</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Created</th>
@@ -147,6 +180,7 @@ export function AdminUsersPage() {
                   >
                     <td className="px-4 py-3 font-medium">{user.name || '—'}</td>
                     <td className="px-4 py-3 text-[var(--on-surface-variant)]">{user.email || '—'}</td>
+                    <td className="px-4 py-3 text-[var(--on-surface-variant)]">{user.phone || '—'}</td>
                     <td className="px-4 py-3">{formatRoleLabel(user.role)}</td>
                     <td className="px-4 py-3">
                       <Badge tone={active ? 'success' : 'danger'}>{active ? 'active' : 'inactive'}</Badge>
@@ -205,6 +239,15 @@ export function AdminUsersPage() {
               required
             />
           </Field>
+          <Field label="Phone">
+            <Input
+              inputMode="tel"
+              value={addForm.phone}
+              onChange={(e) => setAddForm((f) => ({ ...f, phone: e.target.value }))}
+              placeholder="+91XXXXXXXXXX"
+              required
+            />
+          </Field>
           <Field label="Temporary password">
             <Input
               type="password"
@@ -237,27 +280,42 @@ export function AdminUsersPage() {
         </form>
       </Modal>
 
-      <Modal open={editOpen} title="Edit role" onClose={() => setEditOpen(false)}>
+      <Modal open={editOpen} title="Edit team member" onClose={() => setEditOpen(false)}>
         {editUser ? (
-          <form className="grid gap-4" onSubmit={saveRole}>
-            <p className="text-sm text-[var(--on-surface-variant)]">
-              {editUser.name} ({editUser.email})
-            </p>
+          <form className="grid gap-4 md:grid-cols-2" onSubmit={saveRole}>
+            <div className="md:col-span-2 text-sm text-[var(--on-surface-variant)]">
+              Email is read-only and cannot be changed.
+            </div>
+            <Field label="Name">
+              <Input value={editName} onChange={(e) => setEditName(e.target.value)} required />
+            </Field>
+            <Field label="Phone">
+              <Input
+                inputMode="tel"
+                value={editPhone}
+                onChange={(e) => setEditPhone(e.target.value)}
+                placeholder="+91XXXXXXXXXX"
+                required
+              />
+            </Field>
             <Field label="Role">
-              <Select value={editRole} onChange={(e) => setEditRole(e.target.value)}>
-                {ASSIGNABLE_ROLES.map((r) => (
+              <Select value={editRole} onChange={(e) => setEditRole(e.target.value)} required>
+                {editRoleOptions.map((r) => (
                   <option key={r} value={r}>
                     {formatRoleLabel(r)}
                   </option>
                 ))}
               </Select>
             </Field>
-            <div className="flex justify-end gap-2 pt-2">
+            <Field label="Email (not editable)">
+              <Input value={editUser.email || ''} disabled />
+            </Field>
+            <div className="md:col-span-2 flex justify-end gap-2 pt-2">
               <Button type="button" variant="ghost" onClick={() => setEditOpen(false)}>
                 Cancel
               </Button>
               <Button type="submit" disabled={Boolean(mutating.adminUserUpdate)}>
-                {mutating.adminUserUpdate ? 'Saving...' : 'Save'}
+                {mutating.adminUserUpdate ? 'Saving...' : 'Save changes'}
               </Button>
             </div>
           </form>

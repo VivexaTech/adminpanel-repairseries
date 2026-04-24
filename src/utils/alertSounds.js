@@ -1,10 +1,9 @@
 /**
  * Custom MP3 alerts (place files under `public/sounds/`).
- * Defaults: `/sounds/notification.mp3` for both booking and chat (use env to split).
+ * Default: `/sounds/notification.mp3` (override with env).
  *
  * Optional `.env.local`:
  *   VITE_SOUND_NEW_BOOKING=/sounds/booking-new.mp3
- *   VITE_SOUND_NEW_CHAT=/sounds/chat-message.mp3
  *
  * Dedupe / “play once per event” is handled in AppContext via soundDedupe keys.
  * Browsers may block audio until a user gesture (e.g. login); preload runs after session.
@@ -14,8 +13,6 @@ const DEFAULT_MP3 = '/sounds/notification.mp3'
 
 export const SOUND_URL_NEW_BOOKING =
   import.meta.env.VITE_SOUND_NEW_BOOKING?.trim() || DEFAULT_MP3
-export const SOUND_URL_NEW_CHAT =
-  import.meta.env.VITE_SOUND_NEW_CHAT?.trim() || DEFAULT_MP3
 
 /** @type {Map<string, HTMLAudioElement>} */
 const audioPool = new Map()
@@ -53,10 +50,7 @@ function playMp3Once(src) {
 /** Preload after login to reduce first-play delay. */
 export function preloadAlertSounds() {
   try {
-    const a = getOrCreateAudio(SOUND_URL_NEW_BOOKING)
-    const b = getOrCreateAudio(SOUND_URL_NEW_CHAT)
-    a?.load()
-    if (b !== a) b?.load()
+    getOrCreateAudio(SOUND_URL_NEW_BOOKING)?.load()
   } catch {
     // ignore
   }
@@ -65,9 +59,4 @@ export function preloadAlertSounds() {
 /** New booking (status New) — custom MP3 */
 export function playNewBookingSiren() {
   playMp3Once(SOUND_URL_NEW_BOOKING)
-}
-
-/** New support message from user — custom MP3 */
-export function playChatMessageSound() {
-  playMp3Once(SOUND_URL_NEW_CHAT)
 }

@@ -10,7 +10,13 @@ import {
 import { useMemo } from 'react'
 import { Card, PageHeader, Badge } from '../components/ui'
 import { useApp } from '../context/useApp'
-import { compactNumber, currency, formatDateTime, getBookingAmount, isBookingCompleted } from '../utils/helpers'
+import {
+  compactNumber,
+  currency,
+  formatDateTime,
+  getBookingEarningSplit,
+  isBookingRevenueCounted,
+} from '../utils/helpers'
 
 export function DashboardPage() {
   const { bookings, customers, metrics, loading } = useApp()
@@ -27,14 +33,14 @@ export function DashboardPage() {
     })
 
     bookings
-      .filter((b) => isBookingCompleted(b))
+      .filter((b) => isBookingRevenueCounted(b))
       .forEach((b) => {
         const raw = b.scheduledAt?.toDate?.() || b.dateTime || b.scheduledAt
         if (!raw) return
         const d = new Date(raw)
         const key = `${d.getFullYear()}-${d.getMonth()}`
         const idx = months.findIndex((m) => m.key === key)
-        if (idx >= 0) months[idx].revenue += getBookingAmount(b)
+        if (idx >= 0) months[idx].revenue += getBookingEarningSplit(b).platformCut
       })
 
     return months.map(({ month, revenue }) => ({ month, revenue }))
@@ -43,7 +49,7 @@ export function DashboardPage() {
   const cards = [
     { label: 'Total Orders Completed', value: compactNumber(metrics.totalOrdersCompleted) },
     { label: 'Pending Bookings', value: compactNumber(metrics.pendingBookings) },
-    { label: 'Total Earnings', value: currency(metrics.totalEarnings) },
+    { label: 'Platform Earnings', value: currency(metrics.platformEarnings) },
     { label: "Today's Bookings", value: compactNumber(metrics.todaysBookings) },
   ]
 
@@ -62,7 +68,7 @@ export function DashboardPage() {
         description={`Track service health across ${customers.length} customers and field operations in realtime.`}
       />
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {cards.map((card) => (
           <Card key={card.label}>
             <p className="text-sm text-slate-500 dark:text-slate-400">{card.label}</p>
@@ -75,9 +81,9 @@ export function DashboardPage() {
         <Card>
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Monthly Revenue</h3>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Monthly platform earnings</h3>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                Billing trend and earnings growth
+                30% platform share from completed, paid bookings
               </p>
             </div>
             <Badge tone="info">Live view</Badge>
@@ -88,8 +94,8 @@ export function DashboardPage() {
                 <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#33415520" />
                 <XAxis dataKey="month" />
                 <YAxis />
-                <Tooltip />
-                <Bar dataKey="revenue" fill="#2563eb" radius={[12, 12, 0, 0]} />
+                <Tooltip formatter={(value) => [currency(value), 'Platform earnings']} />
+                <Bar dataKey="revenue" fill="#2563eb" radius={[12, 12, 0, 0]} name="Platform earnings" />
               </BarChart>
             </ResponsiveContainer>
           </div>

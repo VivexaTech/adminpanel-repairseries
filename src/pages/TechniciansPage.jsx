@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Badge } from '../components/ui'
 import { useApp } from '../context/useApp'
-import { currency } from '../utils/helpers'
+import { currency, getBookingEarningSplit, isBookingRevenueCounted } from '../utils/helpers'
 
 const emptyForm = {
   id: '',
@@ -49,13 +49,16 @@ export function TechniciansPage() {
       if (!techId) continue
 
       if (!stats[techId]) {
-        stats[techId] = { completed: 0, pending: 0, earnings: 0 }
+        stats[techId] = { completed: 0, pending: 0, technicianEarnings: 0, platformDeduction: 0 }
       }
 
-      const amount = Number(booking.amount || 0)
       if (booking.status === 'Completed') {
         stats[techId].completed += 1
-        stats[techId].earnings += amount
+        if (isBookingRevenueCounted(booking)) {
+          const { platformCut, technicianEarning } = getBookingEarningSplit(booking)
+          stats[techId].technicianEarnings += technicianEarning
+          stats[techId].platformDeduction += platformCut
+        }
       } else if (['Assigned', 'New', 'Pending', 'Started'].includes(booking.status)) {
         stats[techId].pending += 1
       }
@@ -162,7 +165,13 @@ export function TechniciansPage() {
               <p>Completed: {stats.completed}</p>
               <p>Pending: {stats.pending}</p>
               <p className="font-semibold text-emerald-600 dark:text-emerald-300">
-                Total Earnings: {currency(stats.earnings)}
+                Total Earnings (70%): {currency(stats.technicianEarnings)}
+              </p>
+              <p className="font-medium text-slate-600 dark:text-slate-400">
+                Total Deduction (30%): {currency(stats.platformDeduction)}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-500">
+                Completed + paid bookings only
               </p>
               <p>Skills: {technician.skills.join(', ')}</p>
             </div>

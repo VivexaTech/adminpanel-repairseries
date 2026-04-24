@@ -30,16 +30,16 @@ service cloud.firestore {
       return isActiveAdmin() && role() == 'superAdmin';
     }
 
-    function isSupportManager() {
-      return isActiveAdmin() && role() == 'supportManager';
-    }
-
     function isTechnicianManager() {
       return isActiveAdmin() && role() == 'technicianManager';
     }
 
     function isBookingManager() {
       return isActiveAdmin() && role() == 'bookingManager';
+    }
+
+    function isServiceManager() {
+      return isActiveAdmin() && role() == 'serviceManager';
     }
 
     match /adminUsers/{userId} {
@@ -53,7 +53,8 @@ service cloud.firestore {
     }
 
     match /customers/{docId} {
-      allow read, write: if isSuperAdmin() || isBookingManager();
+      allow read: if isSuperAdmin() || isBookingManager();
+      allow write: if isSuperAdmin();
     }
 
     match /technicians/{docId} {
@@ -67,22 +68,13 @@ service cloud.firestore {
     }
 
     match /services/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager();
-      allow write: if isSuperAdmin();
+      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
+      allow write: if isSuperAdmin() || isServiceManager();
     }
 
     match /categories/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager();
-      allow write: if isSuperAdmin();
-    }
-
-    match /supportChats/{chatId} {
-      allow read, write: if isSuperAdmin() || isSupportManager();
-
-      match /messages/{msgId} {
-        allow read, create: if isSuperAdmin() || isSupportManager();
-        allow update, delete: if false;
-      }
+      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
+      allow write: if isSuperAdmin() || isServiceManager();
     }
 
     // Queued by admin panel; Cloud Function sends FCM (admin SDK bypasses these rules).
@@ -92,8 +84,18 @@ service cloud.firestore {
     }
 
     match /faqs/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager();
-      allow write: if isSuperAdmin();
+      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
+      allow write: if isSuperAdmin() || isServiceManager();
+    }
+
+    match /offers/{docId} {
+      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
+      allow write: if isSuperAdmin() || isServiceManager();
+    }
+
+    match /coupons/{docId} {
+      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
+      allow write: if isSuperAdmin() || isServiceManager();
     }
 
     match /{document=**} {

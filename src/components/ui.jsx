@@ -96,7 +96,7 @@ export function Modal({ open, title, onClose, children, className, bodyClassName
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[color-mix(in_srgb,var(--on-surface)_45%,transparent)] p-3 sm:p-4">
       <div
         className={cn(
-          'glass flex w-full max-w-2xl flex-col rounded-3xl border border-[var(--outline-variant)]/60 p-4 sm:p-6',
+          'glass flex max-h-[90vh] w-full max-w-2xl flex-col rounded-3xl border border-[var(--outline-variant)]/60 p-4 sm:p-6',
           className,
         )}
       >
@@ -109,7 +109,7 @@ export function Modal({ open, title, onClose, children, className, bodyClassName
             <X className="size-4" />
           </button>
         </div>
-        <div className={cn('min-h-0', bodyClassName)}>{children}</div>
+        <div className={cn('min-h-0 flex-1 overflow-y-auto', bodyClassName)}>{children}</div>
       </div>
     </div>
   )

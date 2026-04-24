@@ -5,7 +5,6 @@ import {
   doc,
   getDocs,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -74,46 +73,4 @@ export const getBookingsForDay = async ({ dayStart, dayEnd }) => {
   )
   const snapshot = await getDocs(q)
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
-}
-
-export const subscribeChatMessages = (chatId, onData, onError) => {
-  ensureDb()
-  const q = query(collection(db, 'supportChats', chatId, 'messages'), orderBy('timestamp', 'asc'))
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      try {
-        const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
-        onData(rows)
-      } catch (err) {
-        console.error('[subscribeChatMessages] map', chatId, err)
-        onError?.(err)
-      }
-    },
-    (err) => {
-      console.error('[subscribeChatMessages]', chatId, err)
-      onError?.(err)
-    },
-  )
-}
-
-export const sendSupportMessage = async (chatId, { message, senderRole }) => {
-  ensureDb()
-  const chatRef = doc(db, 'supportChats', chatId)
-  await setDoc(chatRef, { updatedAt: serverTimestamp() }, { merge: true })
-  await addDoc(collection(db, 'supportChats', chatId, 'messages'), {
-    message,
-    senderRole,
-    timestamp: serverTimestamp(),
-  })
-  await setDoc(
-    chatRef,
-    {
-      lastMessage: message,
-      lastMessageAt: serverTimestamp(),
-      lastSenderRole: senderRole,
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  )
 }

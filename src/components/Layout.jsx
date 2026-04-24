@@ -1,7 +1,6 @@
 import {
   Bell,
   LayoutDashboard,
-  MessageCircle,
   MoonStar,
   Settings,
   SunMedium,
@@ -19,13 +18,14 @@ const navItems = [
   { to: '/customers', label: 'Customers', icon: User },
   { to: '/technicians', label: 'Technicians', icon: Wrench },
   { to: '/bookings', label: 'Bookings', icon: Bell },
-  { to: '/support', label: 'Support', icon: MessageCircle, badgeKey: 'support' },
   { to: '/services', label: 'Services', icon: Settings },
+  { to: '/offers', label: 'Offers', icon: Settings },
+  { to: '/coupons', label: 'Coupons', icon: Settings },
   { to: '/users', label: 'Users', icon: Users },
 ]
 
 export function AdminLayout({ children }) {
-  const { session, theme, setTheme, logout, supportUnreadTotal } = useApp()
+  const { session, theme, setTheme, logout } = useApp()
   const location = useLocation()
 
   return (
@@ -61,14 +61,7 @@ export function AdminLayout({ children }) {
                 }
               >
                 <item.icon className="size-4" />
-                <span className="flex flex-1 items-center justify-between gap-2">
-                  {item.label}
-                  {item.badgeKey === 'support' && supportUnreadTotal > 0 ? (
-                    <span className="min-w-[1.25rem] rounded-full bg-[var(--error)] px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-[var(--surface-lowest)]">
-                      {supportUnreadTotal > 99 ? '99+' : supportUnreadTotal}
-                    </span>
-                  ) : null}
-                </span>
+                <span className="flex flex-1 items-center justify-between gap-2">{item.label}</span>
               </NavLink>
             ))}
           </nav>

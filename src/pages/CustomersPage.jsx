@@ -5,11 +5,13 @@ import { useApp } from '../context/useApp'
 import { exportRows } from '../services/csv'
 
 export function CustomersPage() {
-  const { customers, toggleCustomerBlock, deleteCustomer, createCustomer, loading, mutating } = useApp()
+  const { customers, session, toggleCustomerBlock, deleteCustomer, createCustomer, updateCustomerDetails, loading, mutating } = useApp()
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState(null)
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState({ name: '', phone: '', email: '', address: '' })
+  const [editOpen, setEditOpen] = useState(false)
+  const [editForm, setEditForm] = useState({ id: '', name: '', phone: '', email: '', role: '' })
 
   const filteredCustomers = useMemo(
     () =>
@@ -26,6 +28,13 @@ export function CustomersPage() {
     setForm({ name: '', phone: '', email: '', address: '' })
     setOpen(false)
   }
+
+  const resetEdit = () => {
+    setEditForm({ id: '', name: '', phone: '', email: '', role: '' })
+    setEditOpen(false)
+  }
+
+  const canEdit = session?.role === 'superAdmin'
 
   const submit = async (event) => {
     event.preventDefault()
@@ -54,6 +63,25 @@ export function CustomersPage() {
     try {
       await createCustomer({ name, phone, email, address })
       reset()
+    } catch (error) {
+      toast.error(error.message)
+    }
+  }
+
+  const submitEdit = async (event) => {
+    event.preventDefault()
+    if (!canEdit) {
+      toast.error('Only Super Admins can update customer details.')
+      return
+    }
+    try {
+      await updateCustomerDetails({
+        customerId: editForm.id,
+        name: editForm.name,
+        phone: editForm.phone,
+        role: editForm.role,
+      })
+      resetEdit()
     } catch (error) {
       toast.error(error.message)
     }
@@ -114,6 +142,25 @@ export function CustomersPage() {
                 <Button variant="ghost" className="w-full" onClick={() => setSelected(customer)}>
                   View
                 </Button>
+                {canEdit ? (
+                  <Button
+                    variant="ghost"
+                    className="w-full"
+                    onClick={() => {
+                      setEditForm({
+                        id: customer.id,
+                        name: customer.name || '',
+                        phone: customer.phone || '',
+                        email: customer.email || '',
+                        role: customer.role || '',
+                      })
+                      setEditOpen(true)
+                    }}
+                    disabled={Boolean(mutating.customerUpdate)}
+                  >
+                    Edit
+                  </Button>
+                ) : null}
                 <Button
                   variant="ghost"
                   className="w-full"
@@ -165,6 +212,24 @@ export function CustomersPage() {
                       <Button variant="ghost" onClick={() => setSelected(customer)}>
                         View
                       </Button>
+                      {canEdit ? (
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            setEditForm({
+                              id: customer.id,
+                              name: customer.name || '',
+                              phone: customer.phone || '',
+                              email: customer.email || '',
+                              role: customer.role || '',
+                            })
+                            setEditOpen(true)
+                          }}
+                          disabled={Boolean(mutating.customerUpdate)}
+                        >
+                          Edit
+                        </Button>
+                      ) : null}
                       <Button
                         variant="ghost"
                         onClick={() => toggleCustomerBlock(customer.id, customer.blocked)}
@@ -199,6 +264,41 @@ export function CustomersPage() {
             ))}
           </div>
         ) : null}
+      </Modal>
+
+      <Modal open={editOpen} title="Edit customer" onClose={resetEdit} className="max-w-2xl">
+        <form className="grid gap-4 md:grid-cols-2" onSubmit={submitEdit}>
+          <Field label="Name">
+            <Input value={editForm.name} onChange={(e) => setEditForm((c) => ({ ...c, name: e.target.value }))} required />
+          </Field>
+          <Field label="Phone">
+            <Input
+              inputMode="tel"
+              value={editForm.phone}
+              onChange={(e) => setEditForm((c) => ({ ...c, phone: e.target.value }))}
+              placeholder="+91XXXXXXXXXX"
+              required
+            />
+          </Field>
+          <Field label="Role">
+            <Input value={editForm.role} onChange={(e) => setEditForm((c) => ({ ...c, role: e.target.value }))} placeholder="customer" />
+          </Field>
+          <Field label="Email (not editable)">
+            <Input value={editForm.email} disabled />
+          </Field>
+          <div className="md:col-span-2 flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="ghost" onClick={resetEdit} className="w-full sm:w-auto">
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              className="w-full sm:w-auto"
+              disabled={!canEdit || Boolean(mutating.customerUpdate)}
+            >
+              {mutating.customerUpdate ? 'Saving...' : 'Save changes'}
+            </Button>
+          </div>
+        </form>
       </Modal>
 
       <Modal

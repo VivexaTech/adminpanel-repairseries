@@ -17,6 +17,7 @@ const initialService = {
   description: '',
   keyPoints: [],
   price: '',
+  visitingCharge: '',
   duration: '',
   categoryId: '',
   extraPoint: '',
@@ -127,6 +128,10 @@ export function ServicesPage() {
       toast.error('Home page image is required.')
       return
     }
+    if (Number.isNaN(Number(serviceForm.visitingCharge)) || Number(serviceForm.visitingCharge) < 0) {
+      toast.error('Visiting charge must be a valid number (0 or more).')
+      return
+    }
     for (let i = 0; i < serviceForm.brands.length; i += 1) {
       const b = serviceForm.brands[i]
       const hasAny = Boolean(b.name?.trim() || b.logoImage?.trim())
@@ -149,6 +154,7 @@ export function ServicesPage() {
       await upsertService({
         ...serviceForm,
         price: Number(serviceForm.price),
+        visitingCharge: Number(serviceForm.visitingCharge || 0),
         duration: Number(serviceForm.duration),
         keyPoints: serviceForm.keyPoints,
       })
@@ -258,6 +264,7 @@ export function ServicesPage() {
                   <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">{service.description}</p>
                   <div className="mt-4 grid grid-cols-2 gap-3 text-sm text-slate-600 dark:text-slate-300">
                     <p>Price: {currency(service.price)}</p>
+                    <p>Visiting: {currency(service.visitingCharge || 0)}</p>
                     <p>Duration: {service.duration} min</p>
                   </div>
                   {(service.brands || []).length > 0 ? (
@@ -304,6 +311,7 @@ export function ServicesPage() {
                           listImage: service.listImage || '',
                           detailImage: service.detailImage || '',
                           price: String(service.price ?? ''),
+                          visitingCharge: String(service.visitingCharge ?? ''),
                           duration: String(service.duration ?? ''),
                         })
                         setServiceOpen(true)
@@ -422,6 +430,15 @@ export function ServicesPage() {
               type="number"
               value={serviceForm.price}
               onChange={(event) => setServiceForm({ ...serviceForm, price: event.target.value })}
+              required
+            />
+          </Field>
+          <Field label="Visiting charge">
+            <Input
+              type="number"
+              min="0"
+              value={serviceForm.visitingCharge}
+              onChange={(event) => setServiceForm({ ...serviceForm, visitingCharge: event.target.value })}
               required
             />
           </Field>

@@ -3,7 +3,14 @@ import { toast } from 'sonner'
 import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Textarea, Badge } from '../components/ui'
 import { useApp } from '../context/useApp'
 import { exportRows } from '../services/csv'
-import { currency, formatDateTime } from '../utils/helpers'
+import {
+  currency,
+  formatDateTime,
+  getBookingAmount,
+  getBookingBaseAmount,
+  getBookingEarningSplit,
+  normalizeBookingAddOnServices,
+} from '../utils/helpers'
 import {
   addressToFormString,
   bookingAddressSearchText,
@@ -15,6 +22,116 @@ import { ROLES } from '../utils/rbac'
 import { getBookingsForDay } from '../services/firestore'
 
 const statusPriority = { New: 1, Assigned: 2, Started: 3, Pending: 3, Completed: 5 }
+
+function AddonServicesList({ addOns }) {
+  if (!addOns.length) {
+    return <p className="text-sm text-slate-500 dark:text-slate-400">No additional services</p>
+  }
+  return (
+    <ul className="space-y-1.5">
+      {addOns.map((a, i) => (
+        <li
+          key={`${a.serviceName}-${i}`}
+          className="flex justify-between gap-3 text-sm text-slate-700 dark:text-slate-200"
+        >
+          <span className="min-w-0 flex-1 truncate">{a.serviceName}</span>
+          <span className="shrink-0 tabular-nums font-medium">{currency(a.price)}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function BookingPricingSection({ booking, compact = false }) {
+  const addOns = normalizeBookingAddOnServices(booking)
+  const baseAmount = getBookingBaseAmount(booking)
+  const total = getBookingAmount(booking)
+  const split = getBookingEarningSplit(booking)
+  const baseName = booking.serviceName || 'Base service'
+
+  const commission = (
+    <div className="space-y-1 text-slate-600 dark:text-slate-400">
+      <p className="flex justify-between text-sm">
+        <span>Platform cut (30%)</span>
+        <span className="tabular-nums font-medium text-slate-700 dark:text-slate-300">
+          {currency(split.platformCut)}
+        </span>
+      </p>
+      <p className="flex justify-between text-sm">
+        <span>Technician earning (70%)</span>
+        <span className="tabular-nums font-medium text-slate-700 dark:text-slate-300">
+          {currency(split.technicianEarning)}
+        </span>
+      </p>
+    </div>
+  )
+
+  if (compact) {
+    return (
+      <div className="mt-1 space-y-3 text-sm">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Base service
+          </p>
+          <p className="mt-1 flex justify-between gap-2 text-slate-800 dark:text-slate-100">
+            <span className="min-w-0 truncate">{baseName}</span>
+            <span className="shrink-0 tabular-nums font-semibold">{currency(baseAmount)}</span>
+          </p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Additional services
+          </p>
+          <div className="mt-1">
+            <AddonServicesList addOns={addOns} />
+          </div>
+        </div>
+        <div className="rounded-xl border border-blue-200/80 bg-blue-50/60 px-3 py-2.5 dark:border-blue-500/25 dark:bg-blue-950/25">
+          <p className="flex justify-between text-base font-bold text-slate-900 dark:text-white">
+            <span>Total amount</span>
+            <span className="tabular-nums text-blue-700 dark:text-blue-300">{currency(total)}</span>
+          </p>
+        </div>
+        <div className="border-t border-slate-200 pt-3 dark:border-slate-700">{commission}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-slate-200 bg-white/60 p-4 dark:border-slate-600 dark:bg-slate-800/40">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          Base service
+        </h4>
+        <p className="mt-2 flex justify-between gap-3 text-slate-900 dark:text-white">
+          <span className="min-w-0 font-medium">{baseName}</span>
+          <span className="shrink-0 tabular-nums text-lg font-semibold">{currency(baseAmount)}</span>
+        </p>
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-white/60 p-4 dark:border-slate-600 dark:bg-slate-800/40">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          Additional services
+        </h4>
+        <div className="mt-3">
+          <AddonServicesList addOns={addOns} />
+        </div>
+      </div>
+      <div className="rounded-xl border-2 border-blue-500/35 bg-gradient-to-br from-blue-50/90 to-white p-4 dark:border-blue-400/30 dark:from-blue-950/40 dark:to-slate-900/60">
+        <p className="flex justify-between gap-3 text-lg font-bold text-slate-900 dark:text-white">
+          <span>Total amount</span>
+          <span className="tabular-nums text-blue-700 dark:text-blue-300">{currency(total)}</span>
+        </p>
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Base + all add-ons (synced from booking)</p>
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-600 dark:bg-slate-900/40">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          Earnings split
+        </h4>
+        <div className="mt-3">{commission}</div>
+      </div>
+    </div>
+  )
+}
 
 export function BookingsPage() {
   const {
@@ -65,17 +182,22 @@ export function BookingsPage() {
   const sortedBookings = useMemo(
     () =>
       bookings
-        .filter((booking) =>
-          [
+        .filter((booking) => {
+          const addOnNames = Array.isArray(booking.addOnServices)
+            ? booking.addOnServices.map((a) => (a && typeof a === 'object' ? a.serviceName ?? a.name : '')).join(' ')
+            : ''
+          return [
             booking.id,
             booking.serviceName,
             booking.customerId,
             booking.status,
             bookingAddressSearchText(booking.address),
+            addOnNames,
           ]
             .join(' ')
-            .includes(search.toLowerCase()),
-        )
+            .toLowerCase()
+            .includes(search.toLowerCase())
+        })
         .sort((a, b) => {
           const pa = statusPriority[a.status] ?? 99
           const pb = statusPriority[b.status] ?? 99
@@ -336,9 +458,12 @@ export function BookingsPage() {
                 )}
               </p>
               <p className="text-sm text-slate-500 dark:text-slate-400">Status: {booking.status || 'Unknown'}</p>
-              <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                Price: {currency(booking.amount)}
-              </p>
+              {booking.paymentStatus ? (
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Payment: {booking.paymentStatus}
+                </p>
+              ) : null}
+              <BookingPricingSection booking={booking} compact />
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -432,10 +557,13 @@ export function BookingsPage() {
                   <span className="text-slate-500 dark:text-slate-400">Status: </span>
                   {modalState.booking.status || 'Unknown'}
                 </p>
-                <p className="text-slate-700 dark:text-slate-300">
-                  <span className="text-slate-500 dark:text-slate-400">Amount: </span>
-                  {currency(modalState.booking.amount)}
-                </p>
+                {modalState.booking.paymentStatus ? (
+                  <p className="text-slate-700 dark:text-slate-300">
+                    <span className="text-slate-500 dark:text-slate-400">Payment: </span>
+                    {modalState.booking.paymentStatus}
+                  </p>
+                ) : null}
+                <BookingPricingSection booking={modalState.booking} />
                 <p className="whitespace-pre-wrap break-words text-slate-700 dark:text-slate-300">
                   <span className="block text-slate-500 dark:text-slate-400">Job address</span>
                   {formatBookingAddressForDisplay(modalState.booking.address)}
@@ -560,6 +688,7 @@ export function BookingsPage() {
                 notes: createForm.notes,
                 durationMinutes: Number(service.duration || 60),
                 amount: Number(createForm.amount || service.price || 0),
+                visitingCharge: Number(service.visitingCharge || 0),
                 technicianId: technicianId || null,
               })
 

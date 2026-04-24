@@ -10,8 +10,9 @@ import { CustomersPage } from './pages/CustomersPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
 import { ServicesPage } from './pages/ServicesPage'
-import { SupportPage } from './pages/SupportPage'
 import { TechniciansPage } from './pages/TechniciansPage'
+import { OffersPage } from './pages/OffersPage'
+import { CouponsPage } from './pages/CouponsPage'
 import { canAccessPath, getDefaultRoute } from './utils/rbac'
 
 function ProtectedRoute({ children }) {
@@ -94,10 +95,18 @@ function App() {
           }
         />
         <Route
-          path="/support"
+          path="/offers"
           element={
             <ProtectedRoute>
-              <SupportPage />
+              <OffersPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/coupons"
+          element={
+            <ProtectedRoute>
+              <CouponsPage />
             </ProtectedRoute>
           }
         />
