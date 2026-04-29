@@ -29,6 +29,12 @@ import {
 import { ASSIGNABLE_ROLES, ROLES } from '../utils/rbac'
 import { markSoundPlayed, wasSoundPlayed } from '../utils/soundDedupe'
 
+function technicianMatchesServiceCategory(technician, service) {
+  if (!service?.categoryId) return true
+  const cid = String(technician?.categoryId ?? '').trim()
+  return Boolean(cid) && cid === service.categoryId
+}
+
 const ROLE_BINDINGS = {
   [ROLES.SUPER_ADMIN]: [
     { key: 'customers', collectionName: 'customers' },
@@ -46,10 +52,12 @@ const ROLE_BINDINGS = {
     { key: 'customers', collectionName: 'customers' },
     { key: 'technicians', collectionName: 'technicians' },
     { key: 'services', collectionName: 'services' },
+    { key: 'categories', collectionName: 'categories' },
   ],
   [ROLES.TECHNICIAN_MANAGER]: [
     { key: 'technicians', collectionName: 'technicians' },
     { key: 'bookings', collectionName: 'bookings' },
+    { key: 'categories', collectionName: 'categories' },
   ],
   [ROLES.SERVICE_MANAGER]: [
     { key: 'services', collectionName: 'services' },
@@ -308,6 +316,7 @@ export function AppProvider({ children }) {
         pendingBookings: Number(technician.pendingBookings || 0),
         status: technician.status || 'Available',
         skills: technician.skills || [],
+        categoryId: String(technician.categoryId || '').trim(),
         areaAddress: technician.areaAddress || '',
         serviceRadius: Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : 10,
         ...(tLat != null ? { latitude: tLat } : {}),
@@ -386,6 +395,10 @@ export function AppProvider({ children }) {
     await withMutating('bookingAssign', async () => {
       const technician = data.technicians.find((t) => t.id === technicianId)
       if (!technician) throw new Error('Technician not found.')
+      const service = data.services.find((s) => s.id === booking.serviceId)
+      if (!technicianMatchesServiceCategory(technician, service)) {
+        throw new Error('This technician’s category must match the booking’s service category.')
+      }
       await updateDocFields('bookings', bookingId, { technicianId, status: 'Assigned' })
     })
     toast.success('Technician assigned.')
@@ -443,7 +456,18 @@ export function AppProvider({ children }) {
 
       const service =
         booking.serviceId ? data.services.find((s) => s.id === booking.serviceId) : null
-      const servicePrice = Number(service?.price ?? booking.amount ?? 0)
+      const variationId = String(booking.variationId ?? booking.serviceVariationId ?? '').trim()
+      let selectedVariation = null
+      let servicePrice = 0
+      if (service?.hasVariations) {
+        const vars = Array.isArray(service.variations) ? service.variations : []
+        if (!variationId) throw new Error('Select a service variation for this booking.')
+        selectedVariation = vars.find((v) => String(v?.id ?? '') === variationId)
+        if (!selectedVariation) throw new Error('Invalid or unknown service variation.')
+        servicePrice = Number(selectedVariation.price)
+      } else {
+        servicePrice = Number(service?.price ?? booking.amount ?? 0)
+      }
       const visitingCharge = Number(service?.visitingCharge ?? booking.visitingCharge ?? 0)
       if (!Number.isFinite(servicePrice) || servicePrice < 0) throw new Error('Invalid service price.')
       if (!Number.isFinite(visitingCharge) || visitingCharge < 0) throw new Error('Invalid visiting charge.')
@@ -468,11 +492,20 @@ export function AppProvider({ children }) {
       }
       const overlaps = (a, b) => a.start < b.end && a.end > b.start
 
+      if (booking.technicianId) {
+        const pickTech = data.technicians.find((t) => t.id === booking.technicianId)
+        if (pickTech && !technicianMatchesServiceCategory(pickTech, service)) {
+          throw new Error('Selected technician’s category must match this service’s category.')
+        }
+      }
+
       const tryAutoAssign = () => {
         if (booking.technicianId) return { technicianId: booking.technicianId, assigned: true, status: 'Assigned' }
         const target = { start: scheduledAtDate.getTime(), end: scheduledAtDate.getTime() + Number(booking.durationMinutes || 60) * 60_000 }
         const activeStatuses = new Set(['Assigned', 'Pending', 'New', 'Started'])
-        const candidates = data.technicians.filter((t) => t.status === 'Available')
+        const candidates = data.technicians.filter(
+          (t) => t.status === 'Available' && technicianMatchesServiceCategory(t, service),
+        )
         const scored = []
         for (const tech of candidates) {
           const techBookings = data.bookings
@@ -520,6 +553,9 @@ export function AppProvider({ children }) {
         customerId: booking.customerId,
         serviceId: booking.serviceId || '',
         serviceName: booking.serviceName,
+        serviceCategoryId: service?.categoryId || '',
+        serviceVariationId: selectedVariation ? variationId : '',
+        serviceVariationTitle: selectedVariation ? String(selectedVariation.title || '').trim() : '',
         address: normalizedAddr,
         notes: booking.notes || '',
         scheduledAt: Timestamp.fromDate(scheduledAtDate),
@@ -624,11 +660,30 @@ export function AppProvider({ children }) {
       if (!Number.isFinite(visitingCharge) || visitingCharge < 0) {
         throw new Error('Visiting charge must be a number (0 or more).')
       }
+      const hasVariations = Boolean(service.hasVariations)
+      const variations = hasVariations
+        ? (Array.isArray(service.variations) ? service.variations : [])
+            .map((v) => {
+              if (!v || typeof v !== 'object') return null
+              const id = String(v.id || '').trim() || `var-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+              const title = String(v.title || '').trim()
+              const price = Number(v.price)
+              const image = String(v.image || '').trim()
+              if (!title || !Number.isFinite(price) || price < 0 || !image) return null
+              return { id, title, price, image }
+            })
+            .filter(Boolean)
+        : []
+      if (hasVariations && variations.length === 0) {
+        throw new Error('Add at least one complete variation (title, price, image).')
+      }
       const payload = {
         name: service.name,
         description: service.description,
         keyPoints: service.keyPoints?.filter(Boolean) || [],
-        price: Number(service.price || 0),
+        hasVariations,
+        variations: hasVariations ? variations : [],
+        price: hasVariations ? 0 : Number(service.price || 0),
         visitingCharge,
         duration: Number(service.duration || 0),
         categoryId: service.categoryId || '',
@@ -640,6 +695,9 @@ export function AppProvider({ children }) {
         brands,
         processSteps,
         status: service.status || 'Active',
+      }
+      if (!hasVariations && (!Number.isFinite(payload.price) || payload.price < 0)) {
+        throw new Error('Invalid service price.')
       }
       if (service.id) await upsertDoc('services', service.id, payload)
       else await createDoc('services', payload)
@@ -750,6 +808,25 @@ export function AppProvider({ children }) {
     if (session?.role !== ROLES.SUPER_ADMIN) throw new Error('Only Super Admins can manage coupons.')
     await withMutating('couponDelete', async () => removeDoc('coupons', couponId))
     toast.success('Coupon removed.')
+  }
+
+  const updateBookingAddOnApproval = async ({ bookingId, index, approvalStatus }) => {
+    const next = String(approvalStatus || '')
+      .trim()
+      .toLowerCase()
+    if (!['approved', 'pending', 'rejected'].includes(next)) {
+      throw new Error('Invalid approval status.')
+    }
+    await withMutating('bookingAddOn', async () => {
+      const booking = data.bookings.find((b) => b.id === bookingId)
+      if (!booking) throw new Error('Booking not found.')
+      const raw = Array.isArray(booking.addOnServices) ? [...booking.addOnServices] : []
+      if (index < 0 || index >= raw.length) throw new Error('Add-on not found.')
+      const prev = raw[index] && typeof raw[index] === 'object' ? { ...raw[index] } : {}
+      raw[index] = { ...prev, approvalStatus: next }
+      await updateDocFields('bookings', bookingId, { addOnServices: raw })
+    })
+    toast.success('Add-on status updated.')
   }
 
   const normalizePhone = (value) => String(value || '').trim().replace(/\s+/g, '')
@@ -880,6 +957,7 @@ export function AppProvider({ children }) {
     assignTechnician,
     updateBookingStatus,
     createBooking,
+    updateBookingAddOnApproval,
     backfillMissingBookingCoordinates,
     upsertService,
     deleteService,

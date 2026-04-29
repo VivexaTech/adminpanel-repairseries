@@ -10,9 +10,23 @@ const safeMoney = (value) => {
   return Number.isFinite(n) ? n : 0
 }
 
+/** @typedef {{ serviceName: string, price: number, approvalStatus: 'approved' | 'pending' | 'rejected' }} NormalizedAddOn */
+
+const normalizeApprovalStatus = (item) => {
+  const s = String(item?.approvalStatus ?? item?.addonApprovalStatus ?? item?.status ?? 'approved')
+    .trim()
+    .toLowerCase()
+  if (s === 'pending' || s === 'rejected' || s === 'denied' || s === 'declined') {
+    if (s === 'denied' || s === 'declined') return 'rejected'
+    return s === 'pending' ? 'pending' : 'rejected'
+  }
+  return 'approved'
+}
+
 /**
- * Normalized add-ons from `booking.addOnServices` (technician app).
- * Each item: { serviceName, price }
+ * Normalized add-ons from `booking.addOnServices` (user / technician apps).
+ * Each item: { serviceName, price, approvalStatus }
+ * Legacy rows without status are treated as approved.
  */
 export const normalizeBookingAddOnServices = (booking) => {
   const raw = booking?.addOnServices
@@ -26,21 +40,38 @@ export const normalizeBookingAddOnServices = (booking) => {
     out.push({
       serviceName: serviceName || 'Additional service',
       price,
+      approvalStatus: normalizeApprovalStatus(item),
     })
   }
   return out
 }
 
-export const getBookingAddOnsSubtotal = (booking) =>
-  normalizeBookingAddOnServices(booking).reduce((sum, item) => sum + item.price, 0)
+export const getBookingAddOnsSubtotalApproved = (booking) =>
+  normalizeBookingAddOnServices(booking)
+    .filter((item) => item.approvalStatus === 'approved')
+    .reduce((sum, item) => sum + item.price, 0)
+
+/** Sum of all non-rejected add-ons (for inferring stored totals when some rows are pending). */
+export const getBookingAddOnsSubtotalAllCounted = (booking) =>
+  normalizeBookingAddOnServices(booking)
+    .filter((item) => item.approvalStatus !== 'rejected')
+    .reduce((sum, item) => sum + item.price, 0)
+
+export const getBookingAddOnsSubtotal = (booking) => getBookingAddOnsSubtotalApproved(booking)
+
+export const getBookingPendingAddOns = (booking) =>
+  normalizeBookingAddOnServices(booking).filter((item) => item.approvalStatus === 'pending')
+
+export const getBookingApprovedAddOns = (booking) =>
+  normalizeBookingAddOnServices(booking).filter((item) => item.approvalStatus === 'approved')
 
 /**
- * Base service price only (excludes add-ons). When there are no add-ons, same as legacy single total.
+ * Base service line only (excludes visiting charge and add-ons). Prefers `booking.amount`.
  */
 export const getBookingBaseAmount = (booking) => {
   if (!booking || typeof booking !== 'object') return 0
-  const addOnTotal = getBookingAddOnsSubtotal(booking)
-  if (addOnTotal === 0) {
+  const allCountedAddOns = getBookingAddOnsSubtotalAllCounted(booking)
+  if (allCountedAddOns === 0) {
     const raw =
       booking.amount ?? booking.totalAmount ?? booking.total ?? booking.price ?? booking.servicePrice
     return safeMoney(raw)
@@ -49,12 +80,16 @@ export const getBookingBaseAmount = (booking) => {
   const explicitBase = safeMoney(
     booking.baseAmount ?? booking.amount ?? booking.servicePrice ?? booking.price,
   )
-  const docTotal = safeMoney(booking.totalAmount ?? booking.total)
+  const docTotal = safeMoney(booking.totalAmount ?? booking.total ?? booking.finalAmount)
+  const visiting = safeMoney(booking.visitingCharge)
 
   if (docTotal > 0) {
-    const impliedBase = docTotal - addOnTotal
+    const impliedBase = docTotal - visiting - allCountedAddOns
     if (impliedBase >= 0) {
-      if (explicitBase > 0 && Math.abs(explicitBase + addOnTotal - docTotal) <= 1) {
+      if (
+        explicitBase > 0 &&
+        Math.abs(explicitBase + visiting + allCountedAddOns - docTotal) <= 1
+      ) {
         return explicitBase
       }
       return impliedBase
@@ -64,17 +99,26 @@ export const getBookingBaseAmount = (booking) => {
   return explicitBase
 }
 
-/** Gross total: base + add-ons; prefers `totalAmount` when higher (app-synced). */
+export const getBookingVisitingCharge = (booking) => safeMoney(booking?.visitingCharge)
+
+/**
+ * Grand total for customer-facing / admin: service line + visiting + approved add-ons only.
+ */
 export const getBookingAmount = (booking) => {
   if (!booking || typeof booking !== 'object') return 0
-  const addOnTotal = getBookingAddOnsSubtotal(booking)
-  const base = getBookingBaseAmount(booking)
-  if (addOnTotal === 0) {
-    return base
-  }
-  const combined = base + addOnTotal
-  const docTotal = safeMoney(booking.totalAmount ?? booking.total)
-  return Math.max(combined, docTotal)
+  const serviceLine = safeMoney(
+    booking.amount ?? booking.baseAmount ?? booking.servicePrice ?? booking.price,
+  )
+  const visiting = getBookingVisitingCharge(booking)
+  const approvedAddOns = getBookingAddOnsSubtotalApproved(booking)
+  const combined = serviceLine + visiting + approvedAddOns
+  if (combined > 0) return combined
+
+  const stamped = safeMoney(booking.totalAmount ?? booking.finalAmount ?? booking.total)
+  if (stamped > 0) return stamped
+
+  const legacyBase = getBookingBaseAmount(booking)
+  return legacyBase + approvedAddOns
 }
 
 export const isBookingCompleted = (booking) =>

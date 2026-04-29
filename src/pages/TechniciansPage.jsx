@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Badge } from '../components/ui'
 import { useApp } from '../context/useApp'
 import { currency, getBookingEarningSplit, isBookingRevenueCounted } from '../utils/helpers'
@@ -11,6 +12,7 @@ const emptyForm = {
   completedBookings: 0,
   pendingBookings: 0,
   status: 'Available',
+  categoryId: '',
   skills: '',
   areaAddress: '',
   latitude: '',
@@ -19,10 +21,15 @@ const emptyForm = {
 }
 
 export function TechniciansPage() {
-  const { technicians, bookings, upsertTechnician, deleteTechnician, loading, mutating } = useApp()
+  const { technicians, bookings, categories, upsertTechnician, deleteTechnician, loading, mutating } = useApp()
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState(emptyForm)
+
+  const categoryMap = useMemo(
+    () => Object.fromEntries(categories.map((c) => [c.id, c.name])),
+    [categories],
+  )
 
   const filtered = useMemo(
     () =>
@@ -33,12 +40,13 @@ export function TechniciansPage() {
           technician.phone,
           technician.skills.join(' '),
           technician.areaAddress || '',
+          categoryMap[technician.categoryId] || '',
         ]
           .join(' ')
           .toLowerCase()
           .includes(search.toLowerCase()),
       ),
-    [technicians, search],
+    [technicians, search, categoryMap],
   )
 
   const technicianStats = useMemo(() => {
@@ -69,11 +77,15 @@ export function TechniciansPage() {
 
   const submit = (event) => {
     event.preventDefault()
+    if (!String(form.categoryId || '').trim()) {
+      toast.error('Select a technician category.')
+      return
+    }
     upsertTechnician({
       ...form,
       completedBookings: Number(form.completedBookings),
       pendingBookings: Number(form.pendingBookings),
-      skills: form.skills.split(',').map((item) => item.trim()).filter(Boolean),
+      categoryId: form.categoryId?.trim() || '',
       areaAddress: form.areaAddress?.trim() || '',
       latitude: form.latitude === '' ? undefined : form.latitude,
       longitude: form.longitude === '' ? undefined : form.longitude,
@@ -87,7 +99,7 @@ export function TechniciansPage() {
     setForm({
       ...emptyForm,
       ...technician,
-      skills: technician.skills.join(', '),
+      categoryId: technician.categoryId ?? '',
       areaAddress: technician.areaAddress ?? '',
       latitude:
         technician.latitude != null && technician.latitude !== '' ? String(technician.latitude) : '',
@@ -137,6 +149,12 @@ export function TechniciansPage() {
               <div>
                 <h3 className="text-lg font-semibold text-slate-900 dark:text-white">{technician.name}</h3>
                 <p className="text-sm text-slate-500 dark:text-slate-400">{technician.email}</p>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  Category:{' '}
+                  <span className="font-medium text-slate-800 dark:text-slate-200">
+                    {categoryMap[technician.categoryId] || '— Set in edit'}
+                  </span>
+                </p>
               </div>
               <Badge tone={technician.status === 'Available' ? 'success' : 'warning'}>
                 {technician.status}
@@ -211,6 +229,20 @@ export function TechniciansPage() {
           </Field>
           <Field label="Email">
             <Input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
+          </Field>
+          <Field label="Category">
+            <Select
+              value={form.categoryId}
+              onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
+              required
+            >
+              <option value="">Select category (e.g. AC, Plumber)</option>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </Select>
           </Field>
           <Field label="Status">
             <Select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>

@@ -10,12 +10,19 @@ import { currency } from '../utils/helpers'
 
 const emptyBrand = () => ({ name: '', logoImage: '' })
 const emptyStep = () => ({ title: '', description: '', image: '' })
+const newVariationId = () =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `var-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+const emptyVariation = () => ({ id: newVariationId(), title: '', price: '', image: '' })
 
 const initialService = {
   id: '',
   name: '',
   description: '',
   keyPoints: [],
+  hasVariations: false,
+  variations: [],
   price: '',
   visitingCharge: '',
   duration: '',
@@ -132,6 +139,24 @@ export function ServicesPage() {
       toast.error('Visiting charge must be a valid number (0 or more).')
       return
     }
+    if (!serviceForm.hasVariations) {
+      if (Number.isNaN(Number(serviceForm.price)) || Number(serviceForm.price) < 0) {
+        toast.error('Enter a valid base price, or enable variations.')
+        return
+      }
+    } else {
+      if (!serviceForm.variations.length) {
+        toast.error('Add at least one variation with title, price, and image.')
+        return
+      }
+      for (let i = 0; i < serviceForm.variations.length; i += 1) {
+        const v = serviceForm.variations[i]
+        if (!v.title?.trim() || Number.isNaN(Number(v.price)) || Number(v.price) < 0 || !v.image?.trim()) {
+          toast.error(`Variation ${i + 1}: title, price, and image are required.`)
+          return
+        }
+      }
+    }
     for (let i = 0; i < serviceForm.brands.length; i += 1) {
       const b = serviceForm.brands[i]
       const hasAny = Boolean(b.name?.trim() || b.logoImage?.trim())
@@ -153,7 +178,16 @@ export function ServicesPage() {
     try {
       await upsertService({
         ...serviceForm,
-        price: Number(serviceForm.price),
+        price: serviceForm.hasVariations ? 0 : Number(serviceForm.price),
+        hasVariations: Boolean(serviceForm.hasVariations),
+        variations: serviceForm.hasVariations
+          ? serviceForm.variations.map((v) => ({
+              id: String(v.id || '').trim() || newVariationId(),
+              title: String(v.title || '').trim(),
+              price: Number(v.price),
+              image: String(v.image || '').trim(),
+            }))
+          : [],
         visitingCharge: Number(serviceForm.visitingCharge || 0),
         duration: Number(serviceForm.duration),
         keyPoints: serviceForm.keyPoints,
@@ -263,7 +297,24 @@ export function ServicesPage() {
                   </div>
                   <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">{service.description}</p>
                   <div className="mt-4 grid grid-cols-2 gap-3 text-sm text-slate-600 dark:text-slate-300">
-                    <p>Price: {currency(service.price)}</p>
+                    {service.hasVariations ? (
+                      <>
+                        <p className="col-span-2 text-amber-800 dark:text-amber-200">
+                          Variations: {(service.variations || []).length} — base price not used
+                        </p>
+                        {(() => {
+                          const prices = (service.variations || [])
+                            .map((v) => Number(v.price))
+                            .filter((n) => Number.isFinite(n))
+                          const lo = prices.length ? Math.min(...prices) : null
+                          return lo != null ? (
+                            <p className="col-span-2">From {currency(lo)} per selected variant</p>
+                          ) : null
+                        })()}
+                      </>
+                    ) : (
+                      <p>Price: {currency(service.price)}</p>
+                    )}
                     <p>Visiting: {currency(service.visitingCharge || 0)}</p>
                     <p>Duration: {service.duration} min</p>
                   </div>
@@ -304,13 +355,22 @@ export function ServicesPage() {
                         setServiceForm({
                           ...initialService,
                           ...service,
+                          hasVariations: Boolean(service.hasVariations),
+                          variations: Array.isArray(service.variations)
+                            ? service.variations.map((v) => ({
+                                id: String(v.id || newVariationId()),
+                                title: String(v.title ?? ''),
+                                price: String(v.price ?? ''),
+                                image: String(v.image ?? ''),
+                              }))
+                            : [],
                           keyPoints: service.keyPoints || [],
                           brands: (service.brands || []).length ? service.brands : [],
                           processSteps: (service.processSteps || []).length ? service.processSteps : [],
                           homeImage: service.homeImage || service.imageUrl || '',
                           listImage: service.listImage || '',
                           detailImage: service.detailImage || '',
-                          price: String(service.price ?? ''),
+                          price: String(service.hasVariations ? '' : service.price ?? ''),
                           visitingCharge: String(service.visitingCharge ?? ''),
                           duration: String(service.duration ?? ''),
                         })
@@ -425,14 +485,135 @@ export function ServicesPage() {
               <KeyPointsInput value={serviceForm.keyPoints} onChange={(next) => setServiceForm({ ...serviceForm, keyPoints: next })} />
             </Field>
           </div>
-          <Field label="Price">
+          <div className="md:col-span-2 rounded-2xl border border-[var(--outline-variant)] bg-[var(--surface-low)]/40 p-4">
+            <label className="flex cursor-pointer items-center gap-3 text-sm font-medium text-[var(--on-surface)]">
+              <input
+                type="checkbox"
+                className="size-4 rounded border-[var(--outline-variant)]"
+                checked={Boolean(serviceForm.hasVariations)}
+                onChange={(event) => {
+                  const hasVariations = event.target.checked
+                  setServiceForm((c) => ({
+                    ...c,
+                    hasVariations,
+                    price: hasVariations ? '' : c.price,
+                    variations: hasVariations ? (c.variations?.length ? c.variations : [emptyVariation()]) : [],
+                  }))
+                }}
+              />
+              Has variations (pricing only on variants — base price disabled)
+            </label>
+            <p className="mt-2 text-xs text-[var(--on-surface-variant)]">
+              Example: one AC vs two AC — each variant has its own title, price, and image.
+            </p>
+          </div>
+          <Field label={serviceForm.hasVariations ? 'Base price (not used when variations are on)' : 'Price'}>
             <Input
               type="number"
+              min="0"
               value={serviceForm.price}
+              disabled={Boolean(serviceForm.hasVariations)}
               onChange={(event) => setServiceForm({ ...serviceForm, price: event.target.value })}
-              required
+              required={!serviceForm.hasVariations}
             />
           </Field>
+          {serviceForm.hasVariations ? (
+            <div className="md:col-span-2 rounded-2xl border border-[var(--outline-variant)] bg-[var(--surface-low)]/30 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-[var(--on-surface)]">Variations</p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="gap-1"
+                  onClick={() =>
+                    setServiceForm((c) => ({
+                      ...c,
+                      variations: [...(c.variations || []), emptyVariation()],
+                    }))
+                  }
+                >
+                  <Plus className="size-4" /> Add variation
+                </Button>
+              </div>
+              <div className="mt-4 space-y-4">
+                {(serviceForm.variations || []).map((variation, idx) => (
+                  <div
+                    key={variation.id || `idx-${idx}`}
+                    className="rounded-xl border border-[var(--outline-variant)]/80 bg-[var(--surface-lowest)]/60 p-3"
+                  >
+                    <p className="mb-3 text-xs font-medium text-[var(--on-surface-variant)]">Variant {idx + 1}</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Title">
+                        <Input
+                          value={variation.title}
+                          onChange={(e) => {
+                            const next = [...(serviceForm.variations || [])]
+                            next[idx] = { ...next[idx], title: e.target.value }
+                            setServiceForm({ ...serviceForm, variations: next })
+                          }}
+                          placeholder="e.g. 2 AC service"
+                          required
+                        />
+                      </Field>
+                      <Field label="Price">
+                        <Input
+                          type="number"
+                          min="0"
+                          value={variation.price}
+                          onChange={(e) => {
+                            const next = [...(serviceForm.variations || [])]
+                            next[idx] = { ...next[idx], price: e.target.value }
+                            setServiceForm({ ...serviceForm, variations: next })
+                          }}
+                          required
+                        />
+                      </Field>
+                    </div>
+                    <Field label="Image">
+                      <div className="flex flex-wrap items-end gap-3">
+                        <Input
+                          type="file"
+                          accept="image/*"
+                          className="text-sm"
+                          disabled={uploading}
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0]
+                            if (!file) return
+                            setUploading(true)
+                            try {
+                              const url = await uploadToCloudinary(file)
+                              const next = [...(serviceForm.variations || [])]
+                              next[idx] = { ...next[idx], image: url }
+                              setServiceForm({ ...serviceForm, variations: next })
+                            } finally {
+                              setUploading(false)
+                              e.target.value = ''
+                            }
+                          }}
+                        />
+                        {variation.image ? (
+                          <img src={variation.image} alt="" className="h-16 w-16 rounded-lg border object-cover" />
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="text-[var(--error)]"
+                          onClick={() =>
+                            setServiceForm((c) => ({
+                              ...c,
+                              variations: (c.variations || []).filter((_, i) => i !== idx),
+                            }))
+                          }
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
+                    </Field>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <Field label="Visiting charge">
             <Input
               type="number"
