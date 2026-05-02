@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { GripVertical, Plus, Trash2 } from 'lucide-react'
+import { Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Textarea, Badge } from '../components/ui'
 import { KeyPointsInput } from '../components/KeyPointsInput'
@@ -127,6 +127,54 @@ export function ServicesPage() {
   const resetFaq = () => {
     setFaqForm(initialFaq)
     setFaqOpen(false)
+  }
+
+  const duplicateServiceFrom = async (source) => {
+    const home = String(source.homeImage || source.imageUrl || '').trim()
+    if (!home) {
+      toast.error('Cannot duplicate: home page image is required.')
+      return
+    }
+    const baseName = String(source.name || '').trim()
+    const copyName = baseName ? `${baseName} (Copy)` : 'Service (Copy)'
+    const hasVariations = Boolean(source.hasVariations)
+    const duplicatePayload = {
+      ...initialService,
+      ...source,
+      id: '',
+      name: copyName,
+      hasVariations,
+      variations: Array.isArray(source.variations)
+        ? source.variations.map((v) => ({
+            id: newVariationId(),
+            title: String(v.title ?? ''),
+            price: String(v.price ?? ''),
+            image: String(v.image ?? ''),
+          }))
+        : [],
+      keyPoints: source.keyPoints || [],
+      brands: (source.brands || []).length ? source.brands : [],
+      processSteps: (source.processSteps || []).length ? source.processSteps : [],
+      homeImage: source.homeImage || source.imageUrl || '',
+      listImage: source.listImage || '',
+      detailImage: source.detailImage || '',
+      price: String(hasVariations ? '' : source.price ?? ''),
+      visitingCharge: String(source.visitingCharge ?? ''),
+      duration: String(source.duration ?? ''),
+      status: source.status || 'Active',
+      categoryId: source.categoryId || '',
+      extraPoint: source.extraPoint || '',
+      description: source.description || '',
+    }
+    try {
+      const newId = await upsertService(duplicatePayload, {
+        successToast: 'Service duplicated successfully',
+      })
+      setServiceForm({ ...duplicatePayload, id: newId })
+      setServiceOpen(true)
+    } catch (err) {
+      toast.error(err.message)
+    }
   }
 
   const saveService = async (event) => {
@@ -348,7 +396,7 @@ export function ServicesPage() {
                       </span>
                     ))}
                   </div>
-                  <div className="mt-5 flex gap-2">
+                  <div className="mt-5 flex flex-wrap gap-2">
                     <Button
                       variant="ghost"
                       onClick={() => {
@@ -378,6 +426,15 @@ export function ServicesPage() {
                       }}
                     >
                       Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => duplicateServiceFrom(service)}
+                      disabled={Boolean(mutating.service)}
+                      title="Duplicate service"
+                    >
+                      <Copy className="mr-2 h-4 w-4" aria-hidden />
+                      Duplicate
                     </Button>
                     <Button
                       variant="danger"

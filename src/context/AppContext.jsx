@@ -637,7 +637,8 @@ export function AppProvider({ children }) {
     })
   }
 
-  const upsertService = async (service) => {
+  const upsertService = async (service, options = {}) => {
+    let savedId = String(service.id || '').trim()
     await withMutating('service', async () => {
       const brands = Array.isArray(service.brands)
         ? service.brands
@@ -699,10 +700,11 @@ export function AppProvider({ children }) {
       if (!hasVariations && (!Number.isFinite(payload.price) || payload.price < 0)) {
         throw new Error('Invalid service price.')
       }
-      if (service.id) await upsertDoc('services', service.id, payload)
-      else await createDoc('services', payload)
+      if (savedId) await upsertDoc('services', savedId, payload)
+      else savedId = await createDoc('services', payload)
     })
-    toast.success(`Service ${service.name} saved.`)
+    toast.success(options.successToast ?? `Service ${service.name} saved.`)
+    return savedId
   }
 
   const deleteService = async (serviceId) => {
