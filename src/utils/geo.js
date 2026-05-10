@@ -45,3 +45,22 @@ export function getBookingLatLng(bookingLike) {
   }
   return { lat: null, lng: null }
 }
+
+/**
+ * Technician base location: `location.lat` / `location.lng` or GeoPoint, else `latitude` / `longitude`.
+ */
+export function getTechnicianLatLng(technician) {
+  if (!technician) return { lat: null, lng: null }
+  const loc = technician.location
+  if (loc != null && typeof loc === 'object') {
+    const latRaw = loc.lat ?? loc.latitude
+    const lngRaw = loc.lng ?? loc.longitude
+    const lat = latRaw != null && latRaw !== '' ? Number(latRaw) : null
+    const lng = lngRaw != null && lngRaw !== '' ? Number(lngRaw) : null
+    if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng }
+  }
+  let lat = parseCoord(technician.latitude)
+  let lng = parseCoordLng(technician.longitude)
+  if (lat != null && lng != null) return { lat, lng }
+  return { lat: null, lng: null }
+}

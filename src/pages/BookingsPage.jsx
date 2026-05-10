@@ -25,9 +25,23 @@ import {
   normalizeBookingAddressForStorage,
 } from '../utils/bookingAddress'
 import { ROLES } from '../utils/rbac'
-import { getBookingsForDay } from '../services/firestore'
+import { verifyBusySlotsFree } from '../services/technicianBusySlots'
+import { getSlotDescriptorsForBookingWindow } from '../utils/technicianSlots'
+import { geocodeAddressString } from '../services/geocode'
+import { getBookingLatLng, getTechnicianLatLng, haversineDistanceKm, parseCoord, parseCoordLng } from '../utils/geo'
 
 const statusPriority = { New: 1, Assigned: 2, Started: 3, Pending: 3, Completed: 5 }
+
+function technicianWithinBookingRadius(technician, bookingLatLng, platformKm) {
+  const { lat: tLat, lng: tLng } = getTechnicianLatLng(technician)
+  if (tLat == null || tLng == null) return false
+  const defaultR = Number(platformKm) > 0 ? Number(platformKm) : 10
+  const techR = Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : defaultR
+  const maxKm = Math.min(techR, defaultR)
+  const { lat: bLat, lng: bLng } = bookingLatLng
+  if (bLat == null || bLng == null) return true
+  return haversineDistanceKm(tLat, tLng, bLat, bLng) <= maxKm
+}
 
 function AddonServicesList({ addOns }) {
   if (!addOns.length) {
@@ -321,6 +335,7 @@ export function BookingsPage() {
     backfillMissingBookingCoordinates,
     loading,
     mutating,
+    platformSettings,
   } = useApp()
   const [search, setSearch] = useState('')
   const [modalState, setModalState] = useState({ mode: null, booking: null })
@@ -390,17 +405,6 @@ export function BookingsPage() {
     [bookings, search],
   )
 
-  const busyTechnicianIds = useMemo(
-    () =>
-      new Set(
-        bookings
-          .filter((booking) => ['Assigned', 'Pending', 'New', 'Started'].includes(booking.status))
-          .map((booking) => booking.technicianId)
-          .filter(Boolean),
-      ),
-    [bookings],
-  )
-
   const resetCreate = () => {
     setCreateForm({
       customerId: '',
@@ -426,59 +430,87 @@ export function BookingsPage() {
 
   useEffect(() => {
     const run = async () => {
+      if (!createOpen) {
+        setCreateAvailability({ loading: false, busyTechIds: new Set(), error: '' })
+        return
+      }
       const start = parseDateTimeLocal(createForm.scheduledAt)
       const service = serviceMap[createForm.serviceId]
       const durationMinutes = Number(service?.duration || 60)
-      if (!createOpen || !start) return
+      if (!start || !service) {
+        setCreateAvailability({ loading: false, busyTechIds: new Set(), error: '' })
+        return
+      }
 
-      const dayStart = new Date(start)
-      dayStart.setHours(0, 0, 0, 0)
-      const dayEnd = new Date(dayStart)
-      dayEnd.setDate(dayEnd.getDate() + 1)
+      const descriptors = getSlotDescriptorsForBookingWindow(start, durationMinutes)
+      if (!descriptors.length) {
+        setCreateAvailability({
+          loading: false,
+          busyTechIds: new Set(technicians.map((t) => t.id)),
+          error: 'Selected time is outside schedulable slots (08:00–22:00 IST).',
+        })
+        return
+      }
 
       setCreateAvailability({ loading: true, busyTechIds: new Set(), error: '' })
       try {
-        const dayBookings = await getBookingsForDay({ dayStart, dayEnd })
+        const addrLine = createForm.address.trim()
+        const normalizedAddr = normalizeBookingAddressForStorage(addrLine)
+        const addrForGeo = formatBookingAddressForDisplay(normalizedAddr)
+        let lat = parseCoord(createForm.latitude)
+        let lng = parseCoordLng(createForm.longitude)
+        if ((lat == null || lng == null) && addrForGeo !== '—') {
+          try {
+            const geo = await geocodeAddressString(addrForGeo)
+            lat = geo.lat
+            lng = geo.lng
+          } catch {
+            /* optional geocode */
+          }
+        }
+        const bookingLatLng = { lat, lng }
+        const platformKmRaw = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
+        const platformKmResolved =
+          Number.isFinite(platformKmRaw) && platformKmRaw > 0 ? platformKmRaw : 10
+
         const busy = new Set()
-        const targetStart = start.getTime()
-        const targetEnd = targetStart + durationMinutes * 60_000
-
-        dayBookings
-          .filter((b) => ['Assigned', 'Pending', 'New', 'Started'].includes(b.status))
-          .filter((b) => b.technicianId)
-          .forEach((b) => {
-            const startMs = b.scheduledAt?.toDate?.()
-              ? b.scheduledAt.toDate().getTime()
-              : b.dateTime
-                ? new Date(b.dateTime).getTime()
-                : null
-            if (!startMs) return
-            const endMs = startMs + Number(b.durationMinutes || 60) * 60_000
-            const overlaps = startMs < targetEnd && endMs > targetStart
-            if (overlaps) busy.add(b.technicianId)
-          })
-
+        const candidates = technicians.filter((t) => {
+          if (!service?.categoryId) return true
+          return String(t.categoryId || '').trim() === service.categoryId
+        })
+        for (const t of candidates) {
+          if (!technicianWithinBookingRadius(t, bookingLatLng, platformKmResolved)) {
+            busy.add(t.id)
+            continue
+          }
+          const v = await verifyBusySlotsFree(t.id, descriptors, null)
+          if (!v.ok) busy.add(t.id)
+        }
         setCreateAvailability({ loading: false, busyTechIds: busy, error: '' })
       } catch {
         setCreateAvailability({
           loading: false,
           busyTechIds: new Set(),
-          error:
-            'Could not check availability. Ensure bookings have a `scheduledAt` Timestamp field in Firestore.',
+          error: 'Could not verify technician slots. Check your connection and Firestore rules.',
         })
       }
     }
-
     run()
-  }, [createOpen, createForm.scheduledAt, createForm.serviceId, serviceMap])
+  }, [
+    createOpen,
+    createForm.scheduledAt,
+    createForm.serviceId,
+    createForm.address,
+    createForm.latitude,
+    createForm.longitude,
+    serviceMap,
+    technicians,
+    platformSettings?.defaultTechnicianServiceRadiusKm,
+  ])
 
   const baseCreateTechnicians = useMemo(
-    () =>
-      technicians
-        .filter((t) => t.status === 'Available')
-        .filter((t) => !busyTechnicianIds.has(t.id))
-        .filter((t) => !createAvailability.busyTechIds.has(t.id)),
-    [technicians, busyTechnicianIds, createAvailability.busyTechIds],
+    () => technicians.filter((t) => !createAvailability.busyTechIds.has(t.id)),
+    [technicians, createAvailability.busyTechIds],
   )
 
   const createAvailableTechnicians = useMemo(() => {
@@ -500,56 +532,73 @@ export function BookingsPage() {
 
   useEffect(() => {
     const loadAvailability = async () => {
-      const bookingStart = modalState.booking?.scheduledAt?.toDate?.()
-        ? modalState.booking.scheduledAt.toDate()
-        : modalState.booking?.dateTime
-          ? new Date(modalState.booking.dateTime)
+      if (modalState.mode !== 'assign' || !modalState.booking) {
+        setAvailability({ loading: false, busyTechIds: new Set(), error: '' })
+        return
+      }
+      const booking = modalState.booking
+      const bookingStart = booking.scheduledAt?.toDate?.()
+        ? booking.scheduledAt.toDate()
+        : booking.dateTime
+          ? new Date(booking.dateTime)
           : null
 
-      if (modalState.mode !== 'assign' || !modalState.booking || !bookingStart) return
+      if (!bookingStart || Number.isNaN(bookingStart.getTime())) {
+        setAvailability({ loading: false, busyTechIds: new Set(), error: '' })
+        return
+      }
 
-      const dayStart = new Date(bookingStart)
-      dayStart.setHours(0, 0, 0, 0)
-      const dayEnd = new Date(dayStart)
-      dayEnd.setDate(dayEnd.getDate() + 1)
+      const service = serviceMap[booking.serviceId]
+      const durationMinutes = Number(booking.durationMinutes || 60)
+      const descriptors = getSlotDescriptorsForBookingWindow(bookingStart, durationMinutes)
+      if (!descriptors.length) {
+        setAvailability({
+          loading: false,
+          busyTechIds: new Set(technicians.map((t) => t.id)),
+          error: 'Booking time is outside schedulable slots (08:00–22:00 IST).',
+        })
+        return
+      }
+
+      const bookingLatLng = getBookingLatLng(booking)
+      const platformKmRaw = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
+      const platformKmResolved =
+        Number.isFinite(platformKmRaw) && platformKmRaw > 0 ? platformKmRaw : 10
 
       setAvailability({ loading: true, busyTechIds: new Set(), error: '' })
       try {
-        const dayBookings = await getBookingsForDay({ dayStart, dayEnd })
         const busy = new Set()
-        const targetStart = bookingStart.getTime()
-        const targetDuration = Number(modalState.booking.durationMinutes || 60)
-        const targetEnd = targetStart + targetDuration * 60_000
-
-        dayBookings
-          .filter((b) => ['Assigned', 'Pending', 'New', 'Started'].includes(b.status))
-          .filter((b) => b.technicianId)
-          .forEach((b) => {
-            const start = b.scheduledAt?.toDate?.()
-              ? b.scheduledAt.toDate().getTime()
-              : b.dateTime
-                ? new Date(b.dateTime).getTime()
-                : null
-            if (!start) return
-            const duration = Number(b.durationMinutes || 60)
-            const end = start + duration * 60_000
-            const overlaps = start < targetEnd && end > targetStart
-            if (overlaps) busy.add(b.technicianId)
-          })
-
+        const bookingId = booking.id
+        const candidates = technicians.filter((t) => {
+          if (service?.categoryId && String(t.categoryId || '').trim() !== service.categoryId) return false
+          return true
+        })
+        for (const t of candidates) {
+          if (!technicianWithinBookingRadius(t, bookingLatLng, platformKmResolved)) {
+            busy.add(t.id)
+            continue
+          }
+          const v = await verifyBusySlotsFree(t.id, descriptors, bookingId)
+          if (!v.ok) busy.add(t.id)
+        }
         setAvailability({ loading: false, busyTechIds: busy, error: '' })
       } catch {
         setAvailability({
           loading: false,
           busyTechIds: new Set(),
-          error:
-            'Could not check availability. Ensure bookings have a `scheduledAt` Timestamp field in Firestore.',
+          error: 'Could not verify technician slots. Check your connection and Firestore rules.',
         })
       }
     }
 
     loadAvailability()
-  }, [modalState.mode, modalState.booking])
+  }, [
+    modalState.mode,
+    modalState.booking,
+    technicians,
+    platformSettings?.defaultTechnicianServiceRadiusKm,
+    serviceMap,
+  ])
 
   useEffect(() => {
     if (!createForm.technicianId) return
@@ -558,16 +607,8 @@ export function BookingsPage() {
   }, [createForm.technicianId, createAvailableTechnicians])
 
   const baseAssignTechnicians = useMemo(
-    () =>
-      technicians
-        .filter((technician) => technician.status === 'Available')
-        .filter(
-          (technician) =>
-            !busyTechnicianIds.has(technician.id) ||
-            modalState.booking?.technicianId === technician.id,
-        )
-        .filter((technician) => !availability.busyTechIds.has(technician.id)),
-    [technicians, busyTechnicianIds, availability.busyTechIds, modalState.booking?.technicianId],
+    () => technicians.filter((technician) => !availability.busyTechIds.has(technician.id)),
+    [technicians, availability.busyTechIds],
   )
 
   const assignBookingService = modalState.booking?.serviceId
@@ -864,7 +905,8 @@ export function BookingsPage() {
                 </p>
               </div>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                Only technicians whose category matches this booking’s service are listed.
+                Only technicians whose category matches this booking’s service, are within radius, and have all
+                hourly slots free for this window (see busySlots in Firestore) are listed.
               </p>
               {availability.loading ? (
                 <div className="text-sm text-slate-500 dark:text-slate-400">Checking availability...</div>
@@ -882,6 +924,9 @@ export function BookingsPage() {
                   </option>
                 ))}
               </Select>
+              {!availability.loading && !availability.error && availableTechnicians.length === 0 ? (
+                <p className="text-sm text-amber-700 dark:text-amber-300">No technician available for this slot.</p>
+              ) : null}
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" onClick={() => setModalState({ mode: null, booking: null })}>
                   Cancel
@@ -1059,6 +1104,15 @@ export function BookingsPage() {
                 </option>
               ))}
             </Select>
+            {!createAvailability.loading &&
+            !createAvailability.error &&
+            createForm.scheduledAt &&
+            createForm.serviceId &&
+            createAvailableTechnicians.length === 0 ? (
+              <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                No technician available for this slot.
+              </p>
+            ) : null}
           </Field>
 
           <Field

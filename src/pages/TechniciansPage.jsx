@@ -1,9 +1,72 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Badge } from '../components/ui'
+import { Button, Badge, Card, Field, Input, Modal, PageHeader, SearchInput, Select } from '../components/ui'
+import { TechnicianSettlementSection } from '../components/TechnicianSettlementSection'
 import { useApp } from '../context/useApp'
-import { currency, isBookingCompleted } from '../utils/helpers'
+import { currency } from '../utils/helpers'
 import { getStoredBookingTotalDeduction, getStoredTechnicianPayout } from '../utils/bookingStoredAmounts'
+import { subscribeTechnicianBusySlots } from '../services/technicianBusySlots'
+import {
+  SCHED_DAY_END_EXCL,
+  slotDisplayKind,
+  slotLabelFromIndex,
+  TIMEZONE,
+} from '../utils/technicianSlots'
+
+function TechnicianSlotCalendar({ technicianId, dateKey }) {
+  const [busyDocs, setBusyDocs] = useState([])
+  useEffect(() => {
+    if (!technicianId) return undefined
+    return subscribeTechnicianBusySlots(
+      technicianId,
+      (docs) => {
+        setBusyDocs(docs.filter((d) => String(d.date || '') === dateKey))
+      },
+      () => {},
+    )
+  }, [technicianId, dateKey])
+
+  const bySlotIndex = useMemo(() => {
+    const m = new Map()
+    for (const d of busyDocs) {
+      const i = Number(d.slotIndex)
+      if (Number.isFinite(i)) m.set(i, d)
+    }
+    return m
+  }, [busyDocs])
+
+  const nSlots = SCHED_DAY_END_EXCL - SCHED_DAY_START_HOUR
+  return (
+    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+      {Array.from({ length: nSlots }, (_, i) => {
+        const slotIndex = i + 1
+        const doc = bySlotIndex.get(slotIndex)
+        const kind = doc ? slotDisplayKind(doc.reason, doc.status) : 'free'
+        const label = slotLabelFromIndex(slotIndex)
+        const styles =
+          kind === 'free'
+            ? 'border-emerald-500/50 bg-emerald-500/10'
+            : kind === 'booking'
+              ? 'border-orange-500/50 bg-orange-500/10'
+              : 'border-red-500/50 bg-red-500/10'
+        const sub =
+          kind === 'free'
+            ? 'Available'
+            : kind === 'booking'
+              ? doc?.bookingId
+                ? `Booked · ${doc.bookingId}`
+                : 'Booked'
+              : 'Manual block'
+        return (
+          <div key={slotIndex} className={`rounded-xl border px-3 py-2 text-sm ${styles}`}>
+            <div className="font-medium text-slate-900 dark:text-slate-100">{label}</div>
+            <div className="text-xs text-slate-600 dark:text-slate-400">{sub}</div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 export function TechniciansPage() {
   const {
@@ -38,6 +101,10 @@ export function TechniciansPage() {
   })
 
   const [search, setSearch] = useState('')
+  const [slotCalendar, setSlotCalendar] = useState(null)
+  const [calendarDate, setCalendarDate] = useState(() =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE }).format(new Date()),
+  )
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState(() => ({
     id: '',
@@ -146,7 +213,7 @@ export function TechniciansPage() {
     <div className="space-y-4">
       <PageHeader
         title="Technician Management"
-        description="Manage staff capacity, availability, and assigned skills."
+        description="Staff, slots, settlement — payout & earning ledger Firestore mein realtime."
         actions={
           <>
             <SearchInput value={search} onChange={setSearch} placeholder="Search technicians..." />
@@ -216,20 +283,28 @@ export function TechniciansPage() {
               </p>
               <p>Completed: {stats.completed}</p>
               <p>Pending: {stats.pending}</p>
-              <p className="font-semibold text-emerald-600 dark:text-emerald-300">
-                Total earnings (completed, from bookings): {currency(stats.technicianEarnings)}
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Bookings se technician share (reference): {currency(stats.technicianEarnings)}
               </p>
               <p className="font-medium text-slate-600 dark:text-slate-400">
-                Total deductions (from bookings): {currency(stats.platformDeduction)}
+                Platform deductions (bookings): {currency(stats.platformDeduction)}
               </p>
-              <p className="text-xs text-slate-500 dark:text-slate-500">
-                Completed + paid bookings only
-              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-500">Completed bookings — display only</p>
               <p>Skills: {technician.skills.join(', ')}</p>
             </div>
-            <div className="mt-5 flex gap-2">
+            <TechnicianSettlementSection technician={technician} />
+            <div className="mt-5 flex flex-wrap gap-2">
               <Button variant="ghost" onClick={() => edit(technician)}>
                 Edit
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setCalendarDate(new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE }).format(new Date()))
+                  setSlotCalendar({ id: technician.id, name: technician.name })
+                }}
+              >
+                Slot calendar
               </Button>
               <Button
                 variant="danger"
@@ -340,6 +415,35 @@ export function TechniciansPage() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        open={Boolean(slotCalendar)}
+        title={slotCalendar ? `Hourly slots — ${slotCalendar.name}` : ''}
+        onClose={() => setSlotCalendar(null)}
+        bodyClassName="max-h-[70vh] overflow-y-auto pr-1"
+      >
+        {slotCalendar ? (
+          <>
+            <Field label={`Date (IST · ${TIMEZONE})`}>
+              <Input
+                type="date"
+                value={calendarDate}
+                onChange={(e) => setCalendarDate(e.target.value)}
+              />
+            </Field>
+            <p className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span className="rounded border border-emerald-500/50 bg-emerald-500/10 px-2 py-0.5">
+                Available
+              </span>
+              <span className="rounded border border-orange-500/50 bg-orange-500/10 px-2 py-0.5">
+                Booked
+              </span>
+              <span className="rounded border border-red-500/50 bg-red-500/10 px-2 py-0.5">Manual</span>
+            </p>
+            <TechnicianSlotCalendar technicianId={slotCalendar.id} dateKey={calendarDate} />
+          </>
+        ) : null}
       </Modal>
     </div>
   )
