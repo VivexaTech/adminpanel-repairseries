@@ -4,12 +4,15 @@ import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Tex
 import { useApp } from '../context/useApp'
 import { exportRows } from '../services/csv'
 import {
+  getStoredBookingTotalAmount,
+  getStoredBookingTotalDeduction,
+  getStoredTechnicianPayout,
+} from '../utils/bookingStoredAmounts'
+import {
   currency,
   formatDateTime,
-  getBookingAmount,
   getBookingApprovedAddOns,
   getBookingBaseAmount,
-  getBookingEarningSplit,
   getBookingPendingAddOns,
   getBookingVisitingCharge,
   normalizeBookingAddOnServices,
@@ -38,6 +41,9 @@ function AddonServicesList({ addOns }) {
           className="flex justify-between gap-3 text-sm text-slate-700 dark:text-slate-200"
         >
           <span className="min-w-0 flex-1 truncate">
+            <span className="mr-2 rounded-md bg-slate-200/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+              {a.serviceType === 'additional' ? 'Additional' : 'Extra'}
+            </span>
             {a.serviceName}
             {a.approvalStatus && a.approvalStatus !== 'approved' ? (
               <Badge tone={a.approvalStatus === 'pending' ? 'warning' : 'neutral'}>
@@ -58,29 +64,51 @@ function BookingPricingSection({
   showAddOnActions = false,
   onSetAddOnStatus,
   mutatingAddOn = false,
+  onResolveApprovalRequest,
+  mutatingApprovalRequest = false,
 }) {
+  const storedTotal = getStoredBookingTotalAmount(booking)
+  const storedDeduction = getStoredBookingTotalDeduction(booking)
+  const storedPayout = getStoredTechnicianPayout(booking)
   const approvedNorm = getBookingApprovedAddOns(booking)
   const pendingNorm = getBookingPendingAddOns(booking)
   const baseAmount = getBookingBaseAmount(booking)
   const visiting = getBookingVisitingCharge(booking)
-  const total = getBookingAmount(booking)
-  const split = getBookingEarningSplit(booking)
   const baseName = booking.serviceName || 'Base service'
   const variationTitle = String(booking.serviceVariationTitle || '').trim()
   const rawAddOns = Array.isArray(booking.addOnServices) ? booking.addOnServices : []
 
+  const extraApproved = approvedNorm.filter((x) => x.serviceType !== 'additional')
+  const additionalApproved = approvedNorm.filter((x) => x.serviceType === 'additional')
+  const extraSum = extraApproved.reduce((s, x) => s + x.price, 0)
+  const additionalSum = additionalApproved.reduce((s, x) => s + x.price, 0)
+
+  const ar = booking.addOnApprovalRequest
+  const batchPending =
+    ar &&
+    String(ar.status || '').toLowerCase() === 'pending' &&
+    Array.isArray(ar.lines) &&
+    ar.lines.length > 0
+
   const commission = (
-    <div className="space-y-1 text-slate-600 dark:text-slate-400">
+    <div className="space-y-2 text-slate-600 dark:text-slate-400">
+      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+        Amounts on this booking in Firestore — not recalculated in the admin panel.
+      </p>
+      <p className="flex justify-between text-sm font-semibold text-slate-800 dark:text-slate-100">
+        <span>Total booking amount</span>
+        <span className="tabular-nums">{currency(storedTotal)}</span>
+      </p>
       <p className="flex justify-between text-sm">
-        <span>Platform cut (30%)</span>
+        <span>Total deduction</span>
         <span className="tabular-nums font-medium text-slate-700 dark:text-slate-300">
-          {currency(split.platformCut)}
+          {currency(storedDeduction)}
         </span>
       </p>
       <p className="flex justify-between text-sm">
-        <span>Technician earning (70%)</span>
+        <span>Technician earning</span>
         <span className="tabular-nums font-medium text-slate-700 dark:text-slate-300">
-          {currency(split.technicianEarning)}
+          {currency(storedPayout)}
         </span>
       </p>
     </div>
@@ -106,8 +134,80 @@ function BookingPricingSection({
     </>
   )
 
+  const batchApprovalBlock = batchPending ? (
+    <div className="rounded-xl border border-violet-300/80 bg-violet-50/70 p-3 dark:border-violet-500/30 dark:bg-violet-950/25">
+      <p className="text-xs font-semibold uppercase tracking-wide text-violet-800 dark:text-violet-200">
+        Pending customer approval (batch)
+      </p>
+      <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+        Technician submitted these items for approval. They are not billed until the customer (or an admin below)
+        approves.
+      </p>
+      <ul className="mt-2 space-y-1.5">
+        {ar.lines.map((line, idx) => (
+          <li key={`batch-${idx}`} className="flex justify-between gap-2 text-sm text-slate-800 dark:text-slate-100">
+            <span className="min-w-0">
+              <span className="mr-2 rounded bg-violet-200/80 px-1.5 py-0.5 text-[10px] font-bold uppercase text-violet-900 dark:bg-violet-800 dark:text-violet-100">
+                {String(line.serviceType || 'extra').toLowerCase() === 'additional' ? 'Additional' : 'Extra'}
+              </span>
+              {(line.serviceName || line.title || '').trim() || 'Item'}
+            </span>
+            <span className="shrink-0 tabular-nums">{currency(line.price)}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 flex justify-between text-sm font-semibold text-slate-900 dark:text-white">
+        <span>Proposed new total</span>
+        <span className="tabular-nums text-violet-700 dark:text-violet-300">
+          {currency(ar.proposedFinalAmount ?? storedTotal)}
+        </span>
+      </p>
+      {onResolveApprovalRequest ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            className="text-xs"
+            disabled={mutatingApprovalRequest}
+            onClick={() => onResolveApprovalRequest({ requestId: ar.requestId, approve: true })}
+          >
+            Approve request
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            className="text-xs text-red-700 dark:text-red-300"
+            disabled={mutatingApprovalRequest}
+            onClick={() => onResolveApprovalRequest({ requestId: ar.requestId, approve: false })}
+          >
+            Reject request
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  ) : null
+
   const addOnSections = (
     <>
+      {batchApprovalBlock}
+      {(extraSum > 0 || additionalSum > 0) && (
+        <div className="grid gap-2 text-xs text-slate-600 dark:text-slate-400">
+          {extraSum > 0 ? (
+            <p className="flex justify-between">
+              <span>Extra services (approved)</span>
+              <span className="tabular-nums font-medium text-slate-800 dark:text-slate-200">{currency(extraSum)}</span>
+            </p>
+          ) : null}
+          {additionalSum > 0 ? (
+            <p className="flex justify-between">
+              <span>Additional services (approved)</span>
+              <span className="tabular-nums font-medium text-slate-800 dark:text-slate-200">
+                {currency(additionalSum)}
+              </span>
+            </p>
+          ) : null}
+        </div>
+      )}
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
           Add-ons (approved — counted in total)
@@ -119,7 +219,7 @@ function BookingPricingSection({
       {pendingNorm.length > 0 ? (
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
-            Add-ons (pending approval)
+            Legacy line-level pending (per row)
           </p>
           <ul className="mt-1 space-y-2">
             {rawAddOns.map((item, index) => {
@@ -175,15 +275,8 @@ function BookingPricingSection({
         </div>
         {addOnSections}
         <div className="rounded-xl border border-blue-200/80 bg-blue-50/60 px-3 py-2.5 dark:border-blue-500/25 dark:bg-blue-950/25">
-          <p className="flex justify-between text-base font-bold text-slate-900 dark:text-white">
-            <span>Final amount</span>
-            <span className="tabular-nums text-blue-700 dark:text-blue-300">{currency(total)}</span>
-          </p>
-          <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
-            Service + visiting + approved add-ons only
-          </p>
+          {commission}
         </div>
-        <div className="border-t border-slate-200 pt-3 dark:border-slate-700">{commission}</div>
       </div>
     )
   }
@@ -200,64 +293,11 @@ function BookingPricingSection({
         <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
           Add-ons
         </h4>
-        <div className="mt-3 space-y-4">
-          <div>
-            <p className="mb-1 text-[11px] font-medium uppercase text-emerald-700 dark:text-emerald-300">Approved</p>
-            <AddonServicesList addOns={approvedNorm} />
-          </div>
-          {pendingNorm.length > 0 ? (
-            <div>
-              <p className="mb-2 text-[11px] font-medium uppercase text-amber-700 dark:text-amber-300">Pending</p>
-              <ul className="space-y-2">
-                {rawAddOns.map((item, index) => {
-                  const [norm] = normalizeBookingAddOnServices({ addOnServices: [item] })
-                  if (!norm || norm.approvalStatus !== 'pending') return null
-                  return (
-                    <li
-                      key={`detail-pend-${index}`}
-                      className="flex flex-col gap-2 rounded-lg border border-amber-200/80 p-3 dark:border-amber-500/25 sm:flex-row sm:items-center sm:justify-between"
-                    >
-                      <span className="text-sm">
-                        {norm.serviceName} · {currency(norm.price)}
-                      </span>
-                      {showAddOnActions && onSetAddOnStatus ? (
-                        <div className="flex gap-2">
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            disabled={mutatingAddOn}
-                            onClick={() => onSetAddOnStatus(index, 'approved')}
-                          >
-                            Approve
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            disabled={mutatingAddOn}
-                            onClick={() => onSetAddOnStatus(index, 'rejected')}
-                          >
-                            Reject
-                          </Button>
-                        </div>
-                      ) : null}
-                    </li>
-                  )
-                })}
-              </ul>
-            </div>
-          ) : null}
-        </div>
+        <div className="mt-3 space-y-4">{addOnSections}</div>
       </div>
-      <div className="rounded-xl border-2 border-blue-500/35 bg-gradient-to-br from-blue-50/90 to-white p-4 dark:border-blue-400/30 dark:from-blue-950/40 dark:to-slate-900/60">
-        <p className="flex justify-between gap-3 text-lg font-bold text-slate-900 dark:text-white">
-          <span>Final amount</span>
-          <span className="tabular-nums text-blue-700 dark:text-blue-300">{currency(total)}</span>
-        </p>
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Service line + visiting + approved add-ons only</p>
-      </div>
-      <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-600 dark:bg-slate-900/40">
+      <div className="rounded-xl border border-blue-200/80 bg-blue-50/60 p-4 dark:border-blue-500/25 dark:bg-blue-950/25">
         <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-          Earnings split
+          Totals (Firestore)
         </h4>
         <div className="mt-3">{commission}</div>
       </div>
@@ -277,6 +317,7 @@ export function BookingsPage() {
     updateBookingStatus,
     createBooking,
     updateBookingAddOnApproval,
+    resolveAddOnApprovalRequest,
     backfillMissingBookingCoordinates,
     loading,
     mutating,
@@ -637,7 +678,18 @@ export function BookingsPage() {
                   Payment: {booking.paymentStatus}
                 </p>
               ) : null}
-              <BookingPricingSection booking={booking} compact />
+              <BookingPricingSection
+                booking={booking}
+                compact
+                onResolveApprovalRequest={async ({ requestId, approve }) => {
+                  try {
+                    await resolveAddOnApprovalRequest({ bookingId: booking.id, requestId, approve })
+                  } catch (e) {
+                    toast.error(e.message)
+                  }
+                }}
+                mutatingApprovalRequest={Boolean(mutating.bookingApprovalRequest)}
+              />
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -763,6 +815,18 @@ export function BookingsPage() {
                 booking={modalState.booking}
                 showAddOnActions
                 mutatingAddOn={Boolean(mutating.bookingAddOn)}
+                mutatingApprovalRequest={Boolean(mutating.bookingApprovalRequest)}
+                onResolveApprovalRequest={async ({ requestId, approve }) => {
+                  try {
+                    await resolveAddOnApprovalRequest({
+                      bookingId: modalState.booking.id,
+                      requestId,
+                      approve,
+                    })
+                  } catch (e) {
+                    toast.error(e.message)
+                  }
+                }}
                 onSetAddOnStatus={async (index, status) => {
                   try {
                     await updateBookingAddOnApproval({

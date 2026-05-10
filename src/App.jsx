@@ -5,10 +5,13 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { AdminLayout } from './components/Layout'
 import { useApp } from './context/useApp'
 import { AdminUsersPage } from './pages/AdminUsersPage'
+import { AdditionalServicesPage } from './pages/AdditionalServicesPage'
 import { BookingsPage } from './pages/BookingsPage'
 import { CustomersPage } from './pages/CustomersPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { ImportServicesPage } from './pages/ImportServicesPage'
 import { LoginPage } from './pages/LoginPage'
+import { PlatformSettingsPage } from './pages/PlatformSettingsPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { TechniciansPage } from './pages/TechniciansPage'
 import { OffersPage } from './pages/OffersPage'
@@ -91,6 +94,30 @@ function App() {
           element={
             <ProtectedRoute>
               <ServicesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/additional-services"
+          element={
+            <ProtectedRoute>
+              <AdditionalServicesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/import-services"
+          element={
+            <ProtectedRoute>
+              <ImportServicesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/platform-settings"
+          element={
+            <ProtectedRoute>
+              <PlatformSettingsPage />
             </ProtectedRoute>
           }
         />

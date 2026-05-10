@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Textarea, Badge } from '../components/ui'
 import { KeyPointsInput } from '../components/KeyPointsInput'
 import { useApp } from '../context/useApp'
-import { exportRows } from '../services/csv'
+import { exportServicesCsv } from '../services/serviceCsvExport'
 import { uploadToCloudinary } from '../services/cloudinary'
 import { currency } from '../utils/helpers'
 
@@ -14,7 +15,7 @@ const newVariationId = () =>
   typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : `var-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-const emptyVariation = () => ({ id: newVariationId(), title: '', price: '', image: '' })
+const emptyVariation = () => ({ id: newVariationId(), title: '', price: '', image: '', status: 'Active' })
 
 const initialService = {
   id: '',
@@ -32,6 +33,8 @@ const initialService = {
   homeImage: '',
   listImage: '',
   detailImage: '',
+  /** UI only — not persisted. New services default to separate until user chooses major. */
+  imageMode: 'separate',
   brands: [],
   processSteps: [],
   status: 'Active',
@@ -40,6 +43,18 @@ const initialService = {
 const initialCategory = { id: '', name: '', icon: '' }
 
 const initialFaq = { id: '', question: '', answer: '' }
+
+/** Detect UI mode from stored URLs (no majorImage field in Firestore). */
+function getServiceImageMode(service) {
+  const h = String(service?.homeImage || service?.imageUrl || '').trim()
+  const l = String(service?.listImage || '').trim()
+  const d = String(service?.detailImage || '').trim()
+  const effL = l || h
+  const effD = d || h
+  if (!h && !l && !d) return 'separate'
+  if (h && h === effL && h === effD) return 'major'
+  return 'separate'
+}
 
 function ImageSlot({ label, value, disabled, onUploaded }) {
   const [busy, setBusy] = useState(false)
@@ -130,9 +145,11 @@ export function ServicesPage() {
   }
 
   const duplicateServiceFrom = async (source) => {
-    const home = String(source.homeImage || source.imageUrl || '').trim()
-    if (!home) {
-      toast.error('Cannot duplicate: home page image is required.')
+    const h = String(source.homeImage || source.imageUrl || '').trim()
+    const l = String(source.listImage || '').trim()
+    const d = String(source.detailImage || '').trim()
+    if (!h && !l && !d) {
+      toast.error('Cannot duplicate: add at least one service image first.')
       return
     }
     const baseName = String(source.name || '').trim()
@@ -150,11 +167,18 @@ export function ServicesPage() {
             title: String(v.title ?? ''),
             price: String(v.price ?? ''),
             image: String(v.image ?? ''),
+            status: String(v.status ?? 'Active'),
           }))
         : [],
       keyPoints: source.keyPoints || [],
       brands: (source.brands || []).length ? source.brands : [],
-      processSteps: (source.processSteps || []).length ? source.processSteps : [],
+      processSteps: Array.isArray(source.processSteps)
+        ? source.processSteps.map((st) => ({
+            title: String(st?.title ?? ''),
+            description: String(st?.description ?? ''),
+            image: st?.image != null && st.image !== '' ? String(st.image) : '',
+          }))
+        : [],
       homeImage: source.homeImage || source.imageUrl || '',
       listImage: source.listImage || '',
       detailImage: source.detailImage || '',
@@ -165,6 +189,7 @@ export function ServicesPage() {
       categoryId: source.categoryId || '',
       extraPoint: source.extraPoint || '',
       description: source.description || '',
+      imageMode: getServiceImageMode(source),
     }
     try {
       const newId = await upsertService(duplicatePayload, {
@@ -179,10 +204,26 @@ export function ServicesPage() {
 
   const saveService = async (event) => {
     event.preventDefault()
-    if (!serviceForm.homeImage?.trim()) {
-      toast.error('Home page image is required.')
+    const { imageMode, ...restForm } = serviceForm
+    const h0 = String(serviceForm.homeImage || '').trim()
+    const l0 = String(serviceForm.listImage || '').trim()
+    const d0 = String(serviceForm.detailImage || '').trim()
+
+    if (imageMode === 'major') {
+      if (!h0) {
+        toast.error('Upload a major image, or switch to separate images and add at least one.')
+        return
+      }
+    } else if (!h0 && !l0 && !d0) {
+      toast.error('Add at least one image (home, list, or detail), or use major image mode.')
       return
     }
+
+    const anchor = h0 || l0 || d0
+    const homeImage = imageMode === 'major' ? h0 : h0 || anchor
+    const listImage = imageMode === 'major' ? h0 : l0 || homeImage
+    const detailImage = imageMode === 'major' ? h0 : d0 || homeImage
+    const imageUrl = homeImage || anchor
     if (Number.isNaN(Number(serviceForm.visitingCharge)) || Number(serviceForm.visitingCharge) < 0) {
       toast.error('Visiting charge must be a valid number (0 or more).')
       return
@@ -216,16 +257,22 @@ export function ServicesPage() {
     }
     for (let i = 0; i < serviceForm.processSteps.length; i += 1) {
       const s = serviceForm.processSteps[i]
-      const partial = Boolean(s.title?.trim() || s.description?.trim() || s.image?.trim())
-      if (!partial) continue
-      if (!s.title?.trim() || !s.description?.trim() || !s.image?.trim()) {
-        toast.error(`Process step ${i + 1}: enter title, description, and image.`)
+      const hasTitle = Boolean(s.title?.trim())
+      const hasDesc = Boolean(s.description?.trim())
+      const hasImage = Boolean(s.image?.trim())
+      if (!hasTitle && !hasDesc && !hasImage) continue
+      if (!hasTitle && !hasDesc) {
+        toast.error(`Process step ${i + 1}: enter at least a title or description (image is optional).`)
         return
       }
     }
     try {
       await upsertService({
-        ...serviceForm,
+        ...restForm,
+        homeImage,
+        listImage,
+        detailImage,
+        imageUrl,
         price: serviceForm.hasVariations ? 0 : Number(serviceForm.price),
         hasVariations: Boolean(serviceForm.hasVariations),
         variations: serviceForm.hasVariations
@@ -234,11 +281,20 @@ export function ServicesPage() {
               title: String(v.title || '').trim(),
               price: Number(v.price),
               image: String(v.image || '').trim(),
+              status: String(v.status || 'Active').trim() || 'Active',
             }))
           : [],
         visitingCharge: Number(serviceForm.visitingCharge || 0),
         duration: Number(serviceForm.duration),
         keyPoints: serviceForm.keyPoints,
+        processSteps: serviceForm.processSteps
+          .filter((s) => s && (String(s.title || '').trim() || String(s.description || '').trim()))
+          .map((s) => {
+            const title = String(s.title || '').trim()
+            const description = String(s.description || '').trim()
+            const img = String(s.image || '').trim()
+            return { title, description, image: img || null }
+          }),
       })
       resetService()
     } catch (err) {
@@ -274,18 +330,16 @@ export function ServicesPage() {
             <SearchInput value={search} onChange={setSearch} placeholder="Search services..." />
             <Button
               variant="ghost"
-              onClick={() =>
-                exportRows(
-                  'services.csv',
-                  filteredServices.map((service) => ({
-                    ...service,
-                    category: categoryMap[service.categoryId],
-                  })),
-                )
-              }
+              onClick={() => exportServicesCsv('services.csv', filteredServices, categoryMap)}
             >
               Export CSV
             </Button>
+            <Link
+              to="/import-services"
+              className="inline-flex items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--surface-lowest)] px-4 py-2.5 text-sm font-medium text-[var(--on-surface)] transition hover:bg-[var(--surface-low)]"
+            >
+              Import CSV
+            </Link>
             <Button variant="ghost" onClick={() => setCategoryOpen(true)}>
               Manage Categories
             </Button>
@@ -403,6 +457,7 @@ export function ServicesPage() {
                         setServiceForm({
                           ...initialService,
                           ...service,
+                          imageMode: getServiceImageMode(service),
                           hasVariations: Boolean(service.hasVariations),
                           variations: Array.isArray(service.variations)
                             ? service.variations.map((v) => ({
@@ -410,11 +465,19 @@ export function ServicesPage() {
                                 title: String(v.title ?? ''),
                                 price: String(v.price ?? ''),
                                 image: String(v.image ?? ''),
+                                status: String(v.status ?? 'Active'),
                               }))
                             : [],
                           keyPoints: service.keyPoints || [],
                           brands: (service.brands || []).length ? service.brands : [],
-                          processSteps: (service.processSteps || []).length ? service.processSteps : [],
+                          processSteps: Array.isArray(service.processSteps)
+                            ? service.processSteps.map((st) => ({
+                                title: String(st?.title ?? ''),
+                                description: String(st?.description ?? ''),
+                                image:
+                                  st?.image != null && st.image !== '' ? String(st.image) : '',
+                              }))
+                            : [],
                           homeImage: service.homeImage || service.imageUrl || '',
                           listImage: service.listImage || '',
                           detailImage: service.detailImage || '',
@@ -599,7 +662,7 @@ export function ServicesPage() {
                     className="rounded-xl border border-[var(--outline-variant)]/80 bg-[var(--surface-lowest)]/60 p-3"
                   >
                     <p className="mb-3 text-xs font-medium text-[var(--on-surface-variant)]">Variant {idx + 1}</p>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-3 sm:grid-cols-3">
                       <Field label="Title">
                         <Input
                           value={variation.title}
@@ -624,6 +687,19 @@ export function ServicesPage() {
                           }}
                           required
                         />
+                      </Field>
+                      <Field label="Status">
+                        <Select
+                          value={variation.status || 'Active'}
+                          onChange={(e) => {
+                            const next = [...(serviceForm.variations || [])]
+                            next[idx] = { ...next[idx], status: e.target.value }
+                            setServiceForm({ ...serviceForm, variations: next })
+                          }}
+                        >
+                          <option>Active</option>
+                          <option>Inactive</option>
+                        </Select>
                       </Field>
                     </div>
                     <Field label="Image">
@@ -701,28 +777,85 @@ export function ServicesPage() {
             </Select>
           </Field>
 
-          <div className="md:col-span-2">
-            <p className="mb-2 text-sm font-semibold text-[var(--on-surface)]">Service images (Cloudinary)</p>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <ImageSlot
-                label="Home page"
-                value={serviceForm.homeImage}
-                disabled={uploading}
-                onUploaded={(url) => setServiceForm((c) => ({ ...c, homeImage: url, imageUrl: url }))}
-              />
-              <ImageSlot
-                label="Services list"
-                value={serviceForm.listImage}
-                disabled={uploading}
-                onUploaded={(url) => setServiceForm((c) => ({ ...c, listImage: url }))}
-              />
-              <ImageSlot
-                label="Service detail"
-                value={serviceForm.detailImage}
-                disabled={uploading}
-                onUploaded={(url) => setServiceForm((c) => ({ ...c, detailImage: url }))}
-              />
+          <div className="md:col-span-2 rounded-2xl border border-[var(--outline-variant)] bg-[var(--surface-low)]/40 p-4">
+            <p className="text-sm font-semibold text-[var(--on-surface)]">Service images (Cloudinary)</p>
+            <p className="mt-1 text-xs text-[var(--on-surface-variant)]">
+              Use one image everywhere or upload separate images for home, list, and detail views.
+            </p>
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-[var(--on-surface)]">
+                <input
+                  type="radio"
+                  name="service-image-mode"
+                  className="size-4 border-[var(--outline-variant)]"
+                  checked={serviceForm.imageMode === 'major'}
+                  onChange={() =>
+                    setServiceForm((c) => {
+                      const anchor = [c.homeImage, c.listImage, c.detailImage].map((x) => String(x || '').trim()).find(Boolean) || ''
+                      return {
+                        ...c,
+                        imageMode: 'major',
+                        homeImage: anchor,
+                        listImage: anchor,
+                        detailImage: anchor,
+                        imageUrl: anchor,
+                      }
+                    })
+                  }
+                />
+                Use major image
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-[var(--on-surface)]">
+                <input
+                  type="radio"
+                  name="service-image-mode"
+                  className="size-4 border-[var(--outline-variant)]"
+                  checked={serviceForm.imageMode === 'separate'}
+                  onChange={() => setServiceForm((c) => ({ ...c, imageMode: 'separate' }))}
+                />
+                Upload separate images
+              </label>
             </div>
+
+            {serviceForm.imageMode === 'major' ? (
+              <div className="mt-4">
+                <ImageSlot
+                  label="Major image"
+                  value={serviceForm.homeImage}
+                  disabled={uploading}
+                  onUploaded={(url) =>
+                    setServiceForm((c) => ({
+                      ...c,
+                      homeImage: url,
+                      listImage: url,
+                      detailImage: url,
+                      imageUrl: url,
+                    }))
+                  }
+                />
+              </div>
+            ) : (
+              <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                <ImageSlot
+                  label="Home page"
+                  value={serviceForm.homeImage}
+                  disabled={uploading}
+                  onUploaded={(url) => setServiceForm((c) => ({ ...c, homeImage: url, imageUrl: url }))}
+                />
+                <ImageSlot
+                  label="Services list"
+                  value={serviceForm.listImage}
+                  disabled={uploading}
+                  onUploaded={(url) => setServiceForm((c) => ({ ...c, listImage: url }))}
+                />
+                <ImageSlot
+                  label="Service detail"
+                  value={serviceForm.detailImage}
+                  disabled={uploading}
+                  onUploaded={(url) => setServiceForm((c) => ({ ...c, detailImage: url }))}
+                />
+              </div>
+            )}
           </div>
 
           <div className="md:col-span-2 rounded-2xl border border-[var(--outline-variant)] bg-[var(--surface-low)]/30 p-4">
@@ -814,7 +947,9 @@ export function ServicesPage() {
                 <Plus className="size-4" /> Add step
               </Button>
             </div>
-            <p className="mt-1 text-xs text-[var(--on-surface-variant)]">Each step needs title, description, and image.</p>
+            <p className="mt-1 text-xs text-[var(--on-surface-variant)]">
+              Each step needs at least a title or description; upload an image only when useful.
+            </p>
             <div className="mt-4 space-y-4">
               {serviceForm.processSteps.map((step, idx) => (
                 <div key={`step-${idx}`} className="rounded-xl border border-[var(--outline-variant)]/80 bg-[var(--surface-lowest)]/60 p-3">
@@ -843,7 +978,7 @@ export function ServicesPage() {
                       }}
                     />
                   </Field>
-                  <Field label="Step image">
+                  <Field label="Upload image (optional)">
                     <Input
                       type="file"
                       accept="image/*"

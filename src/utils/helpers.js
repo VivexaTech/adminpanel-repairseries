@@ -1,8 +1,11 @@
 import { format } from 'date-fns'
 import clsx from 'clsx'
+import {
+  buildFinanceWritePatch,
+  getBookingEarningSplit as getBookingEarningSplitFromSnapshot,
+} from './bookingFinance'
 
 export const cn = (...inputs) => clsx(inputs)
-
 const safeMoney = (value) => {
   if (value == null || value === '') return 0
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0
@@ -41,6 +44,7 @@ export const normalizeBookingAddOnServices = (booking) => {
       serviceName: serviceName || 'Additional service',
       price,
       approvalStatus: normalizeApprovalStatus(item),
+      serviceType: String(item.serviceType || 'extra').toLowerCase() === 'additional' ? 'additional' : 'extra',
     })
   }
   return out
@@ -106,6 +110,9 @@ export const getBookingVisitingCharge = (booking) => safeMoney(booking?.visiting
  */
 export const getBookingAmount = (booking) => {
   if (!booking || typeof booking !== 'object') return 0
+  const storedFinal = safeMoney(booking.finalBookingAmount)
+  if (storedFinal > 0) return storedFinal
+
   const serviceLine = safeMoney(
     booking.amount ?? booking.baseAmount ?? booking.servicePrice ?? booking.price,
   )
@@ -120,7 +127,6 @@ export const getBookingAmount = (booking) => {
   const legacyBase = getBookingBaseAmount(booking)
   return legacyBase + approvedAddOns
 }
-
 export const isBookingCompleted = (booking) =>
   String(booking?.status ?? '')
     .trim()
@@ -135,17 +141,49 @@ export const isBookingPaid = (booking) =>
 export const isBookingRevenueCounted = (booking) =>
   isBookingCompleted(booking) && isBookingPaid(booking)
 
-export const PLATFORM_COMMISSION_RATE = 0.3
+/** Used when Firestore `settings/general` has no `platformCommissionPercent` yet. */
+export const DEFAULT_PLATFORM_COMMISSION_PERCENT = 30
 
 /**
- * 30% platform / 70% technician split from booking total (same formula as technician app).
- * Uses integer rupees: platform rounded, technician gets remainder so amounts sum to total.
+ * Earnings use per-booking fee snapshot only ({@link bookingFinance}). Second argument is ignored (legacy callers).
  */
-export const getBookingEarningSplit = (booking) => {
-  const totalAmount = getBookingAmount(booking)
-  const platformCut = Math.round(totalAmount * PLATFORM_COMMISSION_RATE)
-  const technicianEarning = totalAmount - platformCut
-  return { totalAmount, platformCut, technicianEarning }
+export const getBookingEarningSplit = (booking, _platformCommissionPercentIgnored) =>
+  getBookingEarningSplitFromSnapshot(booking)
+
+/**
+ * Persisted-field patch after mutating `addOnServices` (approved rows).
+ */
+export const computeBookingFinancialPatch = (booking) => buildFinanceWritePatch(booking)
+/**
+ * Catalog rows for technician picker: same `categoryId` as `booking.serviceCategoryId`.
+ * @param {object[]} additionalServices
+ * @param {object} booking
+ */
+export const filterAdditionalServicesForBooking = (additionalServices, booking) => {
+  const cid = String(booking?.serviceCategoryId ?? '').trim()
+  if (!cid) return []
+  return (Array.isArray(additionalServices) ? additionalServices : []).filter(
+    (s) => String(s?.categoryId ?? '').trim() === cid,
+  )
+}
+
+/**
+ * One line item for `booking.addOnServices` (compatible with {@link normalizeBookingAddOnServices}).
+ * @param {object} catalogDoc — additionalServices doc (`id`, `title`, `price`)
+ * @param {{ approvalStatus?: 'approved' | 'pending' | 'rejected' }} [options]
+ */
+export const buildAddOnLineFromAdditionalService = (catalogDoc, options = {}) => {
+  const title = String(catalogDoc?.title ?? '').trim()
+  const price = safeMoney(catalogDoc?.price)
+  const id = String(catalogDoc?.id ?? '').trim()
+  const line = {
+    serviceName: title || 'Additional service',
+    price,
+    approvalStatus: options.approvalStatus ?? 'approved',
+    serviceType: 'additional',
+  }
+  if (id) line.additionalServiceId = id
+  return line
 }
 
 export const currency = (value) => {

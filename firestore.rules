@@ -42,6 +42,48 @@ service cloud.firestore {
       return isActiveAdmin() && role() == 'serviceManager';
     }
 
+    // Technician mobile app: `technicians/{docId}` doc id should match Firebase Auth uid
+    // (or align your tech app with however you store `booking.technicianId`).
+    function isTechnicianActor() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/technicians/$(request.auth.uid));
+    }
+
+    function technicianOwnsBookingData(booking) {
+      return isTechnicianActor() && booking.technicianId == request.auth.uid;
+    }
+
+    function customerOwnsBooking(booking) {
+      return authed() && booking.customerId == request.auth.uid;
+    }
+
+    function technicianApprovalRequestPatchOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'addOnApprovalRequest',
+        'updatedAt',
+      ]);
+    }
+
+    // Customer user app: Approve / reject add-on batch (must match booking math in app or Cloud Function).
+    function customerAddOnDecisionPatchOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'addOnServices',
+        'addOnApprovalRequest',
+        'originalBookingAmount',
+        'addedServicesAmount',
+        'finalBookingAmount',
+        'platformFeeAmount',
+        'addonFeeAmount',
+        'totalDeduction',
+        'technicianFinalEarning',
+        'totalAmount',
+        'finalAmount',
+        'technicianEarning',
+        'platformCommission',
+        'updatedAt',
+      ]);
+    }
+
     match /adminUsers/{userId} {
       allow read: if authed() && (
         request.auth.uid == userId ||
@@ -63,8 +105,19 @@ service cloud.firestore {
     }
 
     match /bookings/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager();
-      allow write: if isSuperAdmin() || isBookingManager();
+      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager()
+        || technicianOwnsBookingData(resource.data);
+      allow create: if isSuperAdmin() || isBookingManager();
+      allow update: if isSuperAdmin() || isBookingManager()
+        || (technicianOwnsBookingData(resource.data)
+            && request.resource.data.technicianId == resource.data.technicianId
+            && request.resource.data.customerId == resource.data.customerId
+            && technicianApprovalRequestPatchOnly())
+        || (customerOwnsBooking(resource.data)
+            && request.resource.data.technicianId == resource.data.technicianId
+            && request.resource.data.customerId == resource.data.customerId
+            && customerAddOnDecisionPatchOnly());
+      allow delete: if isSuperAdmin() || isBookingManager();
     }
 
     match /services/{docId} {
@@ -73,7 +126,13 @@ service cloud.firestore {
     }
 
     match /categories/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
+      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager() || isTechnicianActor();
+      allow write: if isSuperAdmin() || isServiceManager();
+    }
+
+    // Technician-only catalog (not customer-facing services). Filter by `categoryId` in app.
+    match /additionalServices/{docId} {
+      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager() || isTechnicianActor();
       allow write: if isSuperAdmin() || isServiceManager();
     }
 
@@ -96,6 +155,11 @@ service cloud.firestore {
     match /coupons/{docId} {
       allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
       allow write: if isSuperAdmin() || isServiceManager();
+    }
+
+    match /settings/{docId} {
+      allow read: if isActiveAdmin();
+      allow write: if isSuperAdmin();
     }
 
     match /{document=**} {

@@ -2,8 +2,11 @@ import {
   Bell,
   LayoutDashboard,
   MoonStar,
+  PackagePlus,
   Settings,
+  SlidersHorizontal,
   SunMedium,
+  Upload,
   User,
   Users,
   Wrench,
@@ -19,6 +22,9 @@ const navItems = [
   { to: '/technicians', label: 'Technicians', icon: Wrench },
   { to: '/bookings', label: 'Bookings', icon: Bell },
   { to: '/services', label: 'Services', icon: Settings },
+  { to: '/additional-services', label: 'Additional Services', icon: PackagePlus },
+  { to: '/import-services', label: 'Import Services', icon: Upload },
+  { to: '/platform-settings', label: 'Platform Settings', icon: SlidersHorizontal },
   { to: '/offers', label: 'Offers', icon: Settings },
   { to: '/coupons', label: 'Coupons', icon: Settings },
   { to: '/users', label: 'Users', icon: Users },
@@ -28,6 +34,23 @@ export function AdminLayout({ children }) {
   const { session, theme, setTheme, logout } = useApp()
   const location = useLocation()
 
+  const sectionTitle = (() => {
+    if (location.pathname === '/') return 'Dashboard'
+    const slug = location.pathname.replace(/^\//, '').replace(/\/$/, '')
+    const map = {
+      services: 'Services',
+      'additional-services': 'Additional Services',
+      'import-services': 'Import Services',
+      'platform-settings': 'Platform Settings',
+      bookings: 'Bookings',
+      technicians: 'Technicians',
+      customers: 'Customers',
+      offers: 'Offers',
+      coupons: 'Coupons',
+      users: 'Users',
+    }
+    return map[slug] || slug.replace(/-/g, ' ')
+  })()
   return (
     <div className="min-h-screen p-4 text-[var(--on-surface)] lg:p-6">
       <div className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-[270px_minmax(0,1fr)]">
@@ -97,9 +120,7 @@ export function AdminLayout({ children }) {
           <div className="glass flex items-center justify-between rounded-[28px] border border-[var(--outline-variant)]/50 px-5 py-4">
             <div>
               <p className="text-sm text-[var(--on-surface-variant)]">Current section</p>
-              <h3 className="text-lg font-semibold capitalize text-[var(--on-surface)]">
-                {location.pathname === '/' ? 'Dashboard' : location.pathname.slice(1)}
-              </h3>
+              <h3 className="text-lg font-semibold text-[var(--on-surface)]">{sectionTitle}</h3>
             </div>
             <div className="rounded-2xl border border-[var(--outline-variant)] px-4 py-2 text-sm">
               {session?.email}

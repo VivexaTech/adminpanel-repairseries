@@ -14,9 +14,9 @@ import {
   compactNumber,
   currency,
   formatDateTime,
-  getBookingEarningSplit,
-  isBookingRevenueCounted,
+  isBookingCompleted,
 } from '../utils/helpers'
+import { getStoredBookingTotalDeduction } from '../utils/bookingStoredAmounts'
 
 export function DashboardPage() {
   const { bookings, customers, metrics, loading } = useApp()
@@ -33,14 +33,14 @@ export function DashboardPage() {
     })
 
     bookings
-      .filter((b) => isBookingRevenueCounted(b))
+      .filter((b) => isBookingCompleted(b))
       .forEach((b) => {
         const raw = b.scheduledAt?.toDate?.() || b.dateTime || b.scheduledAt
         if (!raw) return
         const d = new Date(raw)
         const key = `${d.getFullYear()}-${d.getMonth()}`
         const idx = months.findIndex((m) => m.key === key)
-        if (idx >= 0) months[idx].revenue += getBookingEarningSplit(b).platformCut
+        if (idx >= 0) months[idx].revenue += getStoredBookingTotalDeduction(b)
       })
 
     return months.map(({ month, revenue }) => ({ month, revenue }))
@@ -83,7 +83,8 @@ export function DashboardPage() {
             <div>
               <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Monthly platform earnings</h3>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                30% platform share from completed, paid bookings
+                Sum of <code className="rounded bg-slate-200/70 px-1 dark:bg-slate-700">totalDeduction</code> on each
+                completed booking — values from Firestore, not recalculated here
               </p>
             </div>
             <Badge tone="info">Live view</Badge>

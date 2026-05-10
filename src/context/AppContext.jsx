@@ -13,19 +13,25 @@ import {
   createDoc,
   removeDoc,
   subscribeCollection,
+  subscribeDoc,
+  setDocumentReplace,
   updateDocFields,
   upsertDoc,
 } from '../services/firestore'
+import { parseAdditionalServiceCsvRow } from '../services/additionalServiceCsvImport'
+import { parseServiceCsvRow } from '../services/serviceCsvImport'
 import { enqueueBookingNotification } from '../services/bookingNotifications'
 import { geocodeAddressString } from '../services/geocode'
 import { playNewBookingSiren, preloadAlertSounds } from '../utils/alertSounds'
 import { formatBookingAddressForDisplay, normalizeBookingAddressForStorage } from '../utils/bookingAddress'
 import { getBookingLatLng, parseCoord } from '../utils/geo'
 import {
-  getBookingEarningSplit,
-  isBookingCompleted,
-  isBookingRevenueCounted,
-} from '../utils/helpers'
+  approvalLinesToAddOnRows,
+  buildFinanceWritePatch,
+  buildInitialBookingFinanceFields,
+} from '../utils/bookingFinance'
+import { getStoredBookingTotalDeduction } from '../utils/bookingStoredAmounts'
+import { isBookingCompleted } from '../utils/helpers'
 import { ASSIGNABLE_ROLES, ROLES } from '../utils/rbac'
 import { markSoundPlayed, wasSoundPlayed } from '../utils/soundDedupe'
 
@@ -41,6 +47,7 @@ const ROLE_BINDINGS = {
     { key: 'technicians', collectionName: 'technicians' },
     { key: 'bookings', collectionName: 'bookings' },
     { key: 'services', collectionName: 'services' },
+    { key: 'additionalServices', collectionName: 'additionalServices' },
     { key: 'categories', collectionName: 'categories' },
     { key: 'faqs', collectionName: 'faqs' },
     { key: 'offers', collectionName: 'offers' },
@@ -61,6 +68,7 @@ const ROLE_BINDINGS = {
   ],
   [ROLES.SERVICE_MANAGER]: [
     { key: 'services', collectionName: 'services' },
+    { key: 'additionalServices', collectionName: 'additionalServices' },
     { key: 'categories', collectionName: 'categories' },
     { key: 'offers', collectionName: 'offers' },
     { key: 'coupons', collectionName: 'coupons' },
@@ -73,6 +81,7 @@ const EMPTY_DATA = {
   technicians: [],
   bookings: [],
   services: [],
+  additionalServices: [],
   categories: [],
   faqs: [],
   offers: [],
@@ -85,11 +94,13 @@ const IDLE_LOADING = {
   technicians: false,
   bookings: false,
   services: false,
+  additionalServices: false,
   categories: false,
   faqs: false,
   offers: false,
   coupons: false,
   adminUsers: false,
+  platformSettings: false,
 }
 
 const AppContext = createContext(null)
@@ -103,11 +114,13 @@ export function AppProvider({ children }) {
     technicians: true,
     bookings: true,
     services: true,
+    additionalServices: true,
     categories: true,
     faqs: true,
     offers: true,
     coupons: true,
     adminUsers: true,
+    platformSettings: false,
   })
   const [mutating, setMutating] = useState({})
   const [data, setData] = useState({
@@ -115,12 +128,14 @@ export function AppProvider({ children }) {
     technicians: [],
     bookings: [],
     services: [],
+    additionalServices: [],
     categories: [],
     faqs: [],
     offers: [],
     coupons: [],
     adminUsers: [],
   })
+  const [platformSettings, setPlatformSettings] = useState(null)
   const bookingsBootstrapped = useRef(false)
   const profileUnsubRef = useRef(null)
 
@@ -208,6 +223,38 @@ export function AppProvider({ children }) {
   }, [])
 
   useEffect(() => {
+    if (!isFirebaseConfigured || !db || !session?.id) {
+      setPlatformSettings(null)
+      setLoading((current) => ({ ...current, platformSettings: false }))
+      return undefined
+    }
+
+    setLoading((current) => ({ ...current, platformSettings: true }))
+    const unsub = subscribeDoc(
+      'settings',
+      'general',
+      (docRow) => {
+        if (!docRow) {
+          setPlatformSettings(null)
+        } else {
+          setPlatformSettings({
+            defaultTechnicianServiceRadiusKm: docRow.defaultTechnicianServiceRadiusKm,
+            platformCommissionPercent: docRow.platformCommissionPercent,
+            addonFeePercent: docRow.addonFeePercent,
+            updatedAt: docRow.updatedAt,
+          })
+        }
+        setLoading((current) => ({ ...current, platformSettings: false }))
+      },
+      () => {
+        toast.error('Could not load platform settings.')
+        setLoading((current) => ({ ...current, platformSettings: false }))
+      },
+    )
+    return () => unsub()
+  }, [session?.id])
+
+  useEffect(() => {
     if (!isFirebaseConfigured || !db) return undefined
 
     if (!session?.id || !session.role) {
@@ -227,11 +274,13 @@ export function AppProvider({ children }) {
     setData({ ...EMPTY_DATA })
     bookingsBootstrapped.current = false
 
-    const nextLoading = { ...IDLE_LOADING }
-    bindings.forEach(({ key }) => {
-      nextLoading[key] = true
+    setLoading((current) => {
+      const nextLoading = { ...IDLE_LOADING }
+      bindings.forEach(({ key }) => {
+        nextLoading[key] = true
+      })
+      return { ...nextLoading, platformSettings: current.platformSettings }
     })
-    setLoading(nextLoading)
 
     const unsubscribers = bindings.map(({ key, collectionName }) =>
       subscribeCollection(
@@ -290,7 +339,7 @@ export function AppProvider({ children }) {
   const withMutating = async (key, fn) => {
     setMutating((current) => ({ ...current, [key]: true }))
     try {
-      await fn()
+      return await fn()
     } finally {
       setMutating((current) => ({ ...current, [key]: false }))
     }
@@ -308,6 +357,9 @@ export function AppProvider({ children }) {
     await withMutating('technician', async () => {
       const tLat = parseCoord(technician.latitude)
       const tLng = parseCoord(technician.longitude)
+      const defaultRadius = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
+      const fallbackRadius =
+        Number.isFinite(defaultRadius) && defaultRadius > 0 ? defaultRadius : 10
       const payload = {
         name: technician.name,
         phone: technician.phone,
@@ -318,7 +370,7 @@ export function AppProvider({ children }) {
         skills: technician.skills || [],
         categoryId: String(technician.categoryId || '').trim(),
         areaAddress: technician.areaAddress || '',
-        serviceRadius: Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : 10,
+        serviceRadius: Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : fallbackRadius,
         ...(tLat != null ? { latitude: tLat } : {}),
         ...(tLng != null ? { longitude: tLng } : {}),
       }
@@ -471,9 +523,21 @@ export function AppProvider({ children }) {
       const visitingCharge = Number(service?.visitingCharge ?? booking.visitingCharge ?? 0)
       if (!Number.isFinite(servicePrice) || servicePrice < 0) throw new Error('Invalid service price.')
       if (!Number.isFinite(visitingCharge) || visitingCharge < 0) throw new Error('Invalid visiting charge.')
-      const totalAmount = servicePrice + visitingCharge
-      const technicianEarning = Math.round(totalAmount * 0.7)
-      const platformCommission = totalAmount - technicianEarning
+      const platformPctRaw = Number(platformSettings?.platformCommissionPercent)
+      const platformPct =
+        Number.isFinite(platformPctRaw) && platformPctRaw >= 0 && platformPctRaw <= 100
+          ? platformPctRaw
+          : 30
+      const addonPctRaw = Number(platformSettings?.addonFeePercent)
+      const addonPct =
+        Number.isFinite(addonPctRaw) && addonPctRaw >= 0 && addonPctRaw <= 100 ? addonPctRaw : 10
+
+      const financeFields = buildInitialBookingFinanceFields(
+        platformPct,
+        addonPct,
+        servicePrice,
+        visitingCharge,
+      )
 
       const getTimeRangeMs = (b) => {
         const startDate = b?.scheduledAt?.toDate?.()
@@ -562,10 +626,8 @@ export function AppProvider({ children }) {
         durationMinutes: Number(booking.durationMinutes || 60),
         amount: servicePrice,
         visitingCharge,
-        totalAmount,
-        finalAmount: totalAmount,
-        technicianEarning,
-        platformCommission,
+        addOnServices: [],
+        ...financeFields,
         technicianId: autoAssigned.technicianId || null,
         status: autoAssigned.status,
         ...(autoAssigned.assigned ? { assignedAt: serverTimestamp() } : {}),
@@ -647,12 +709,15 @@ export function AppProvider({ children }) {
         : []
       const processSteps = Array.isArray(service.processSteps)
         ? service.processSteps
-            .filter((s) => s && String(s.title || '').trim() && String(s.description || '').trim())
-            .map((s) => ({
-              title: String(s.title).trim(),
-              description: String(s.description).trim(),
-              image: String(s.image || '').trim(),
-            }))
+            .filter((s) => s && (String(s.title || '').trim() || String(s.description || '').trim()))
+            .map((s) => {
+              const title = String(s.title || '').trim()
+              const description = String(s.description || '').trim()
+              const raw = s.image
+              const img =
+                raw == null || raw === '' ? null : String(raw).trim() || null
+              return { title, description, image: img }
+            })
         : []
       const homeImage = String(service.homeImage || service.imageUrl || '').trim()
       const listImage = String(service.listImage || '').trim() || homeImage
@@ -667,11 +732,12 @@ export function AppProvider({ children }) {
             .map((v) => {
               if (!v || typeof v !== 'object') return null
               const id = String(v.id || '').trim() || `var-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-              const title = String(v.title || '').trim()
+              const title = String(v.title || v.name || '').trim()
               const price = Number(v.price)
               const image = String(v.image || '').trim()
+              const status = String(v.status || 'Active').trim() || 'Active'
               if (!title || !Number.isFinite(price) || price < 0 || !image) return null
-              return { id, title, price, image }
+              return { id, title, price, image, status }
             })
             .filter(Boolean)
         : []
@@ -710,6 +776,99 @@ export function AppProvider({ children }) {
   const deleteService = async (serviceId) => {
     await withMutating('serviceDelete', async () => removeDoc('services', serviceId))
     toast.success('Service deleted.')
+  }
+
+  const upsertAdditionalService = async (item, options = {}) => {
+    const title = String(item.title || '').trim()
+    if (!title) throw new Error('Title is required.')
+    const categoryId = String(item.categoryId || '').trim()
+    if (!categoryId) throw new Error('Category is required.')
+    const price = Number(item.price)
+    if (!Number.isFinite(price) || price < 0) throw new Error('Price must be a non-negative number.')
+
+    let savedId = String(item.id || '').trim()
+    await withMutating('additionalService', async () => {
+      const payload = { title, price, categoryId }
+      if (savedId) await upsertDoc('additionalServices', savedId, payload)
+      else savedId = await createDoc('additionalServices', payload)
+    })
+    toast.success(options.successToast ?? `“${title}” saved.`)
+    return savedId
+  }
+
+  const deleteAdditionalService = async (id) => {
+    await withMutating('additionalServiceDelete', async () => removeDoc('additionalServices', id))
+    toast.success('Additional service removed.')
+  }
+
+  const importAdditionalServicesFromCsv = async (rows, options = {}) => {
+    const { onProgress } = options
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to import additional services.')
+    }
+    if (!Array.isArray(rows) || rows.length === 0) throw new Error('No valid rows to import.')
+
+    return withMutating('additionalServiceCsvImport', async () => {
+      const existingIds = new Set(data.additionalServices.map((s) => s.id))
+      let imported = 0
+      let updated = 0
+      const errors = []
+      const total = rows.length
+
+      onProgress?.({ current: 0, total, phase: 'import' })
+
+      for (let i = 0; i < rows.length; i += 1) {
+        const row = rows[i]
+        const parsed = parseAdditionalServiceCsvRow(row, data.categories)
+        if (!parsed.ok) {
+          errors.push({ row: i + 2, reason: parsed.error })
+          onProgress?.({ current: i + 1, total, phase: 'import' })
+          continue
+        }
+        const wasExisting = parsed.id && existingIds.has(parsed.id)
+        try {
+          if (parsed.id) {
+            await setDocumentReplace('additionalServices', parsed.id, parsed.payload)
+          } else {
+            const newId = await createDoc('additionalServices', parsed.payload)
+            existingIds.add(newId)
+          }
+        } catch (e) {
+          errors.push({ row: i + 2, reason: e?.message || 'Write failed.' })
+          onProgress?.({ current: i + 1, total, phase: 'import' })
+          continue
+        }
+        if (parsed.id) existingIds.add(parsed.id)
+        if (wasExisting) updated += 1
+        else imported += 1
+        onProgress?.({ current: i + 1, total, phase: 'import' })
+      }
+
+      if (imported > 0) {
+        toast.success('Additional services imported', { description: `${imported} new row(s).` })
+      }
+      if (updated > 0) {
+        toast.success('Additional services updated', { description: `${updated} existing row(s).` })
+      }
+      if (errors.length) {
+        toast.warning(`${errors.length} row(s) skipped.`, {
+          description: errors
+            .slice(0, 8)
+            .map((s) => `Row ${s.row}: ${s.reason}`)
+            .join(' · '),
+        })
+      }
+      if (!imported && !updated && !errors.length) {
+        toast.message('Nothing imported.')
+      }
+      return {
+        imported,
+        updated,
+        skipped: errors.length,
+        failedRows: errors.length,
+        errors,
+      }
+    })
   }
 
   const upsertCategory = async (category) => {
@@ -826,9 +985,70 @@ export function AppProvider({ children }) {
       if (index < 0 || index >= raw.length) throw new Error('Add-on not found.')
       const prev = raw[index] && typeof raw[index] === 'object' ? { ...raw[index] } : {}
       raw[index] = { ...prev, approvalStatus: next }
-      await updateDocFields('bookings', bookingId, { addOnServices: raw })
+      const merged = { ...booking, addOnServices: raw }
+      const financePatch = buildFinanceWritePatch(merged)
+      await updateDocFields('bookings', bookingId, { addOnServices: raw, ...financePatch })
     })
     toast.success('Add-on status updated.')
+  }
+
+  const resolveAddOnApprovalRequest = async ({ bookingId, requestId, approve }) => {
+    const rid = String(requestId || '').trim()
+    if (!rid) throw new Error('Request id is required.')
+    let notifyCustomerId = ''
+    let notifyServiceName = ''
+    await withMutating('bookingApprovalRequest', async () => {
+      const booking = data.bookings.find((b) => b.id === bookingId)
+      if (!booking) throw new Error('Booking not found.')
+      notifyCustomerId = String(booking.customerId || '')
+      notifyServiceName = String(booking.serviceName || '')
+      const req = booking.addOnApprovalRequest
+      if (!req || String(req.status || '').toLowerCase() !== 'pending') {
+        throw new Error('No pending add-on approval request.')
+      }
+      if (String(req.requestId || '').trim() !== rid) {
+        throw new Error('This approval request is outdated. Refresh and try again.')
+      }
+      if (approve) {
+        const rows = approvalLinesToAddOnRows(Array.isArray(req.lines) ? req.lines : [])
+        if (!rows.length) throw new Error('Approval request has no line items.')
+        const raw = [...(Array.isArray(booking.addOnServices) ? booking.addOnServices : []), ...rows]
+        const merged = { ...booking, addOnServices: raw }
+        const financePatch = buildFinanceWritePatch(merged)
+        await updateDocFields('bookings', bookingId, {
+          addOnServices: raw,
+          addOnApprovalRequest: {
+            ...(typeof req === 'object' ? req : {}),
+            status: 'approved',
+            resolvedAt: serverTimestamp(),
+            lines: [],
+          },
+          ...financePatch,
+        })
+      } else {
+        await updateDocFields('bookings', bookingId, {
+          addOnApprovalRequest: {
+            ...(typeof req === 'object' ? req : {}),
+            status: 'rejected',
+            resolvedAt: serverTimestamp(),
+            lines: [],
+          },
+        })
+      }
+    })
+    toast.success(approve ? 'Add-on request approved and applied.' : 'Add-on request rejected.')
+    if (notifyCustomerId) {
+      try {
+        await enqueueBookingNotification({
+          customerId: notifyCustomerId,
+          bookingId,
+          eventType: approve ? 'add_on_approved' : 'add_on_rejected',
+          serviceName: notifyServiceName,
+        })
+      } catch (err) {
+        console.error('[FCM queue] add-on approval', err)
+      }
+    }
   }
 
   const normalizePhone = (value) => String(value || '').trim().replace(/\s+/g, '')
@@ -913,6 +1133,105 @@ export function AppProvider({ children }) {
     toast.success('User updated.')
   }
 
+  const updatePlatformGeneral = async ({
+    defaultTechnicianServiceRadiusKm,
+    platformCommissionPercent,
+    addonFeePercent,
+  }) => {
+    if (session?.role !== ROLES.SUPER_ADMIN) {
+      throw new Error('Only Super Admins can update platform settings.')
+    }
+    if (!isFirebaseConfigured || !db) throw new Error('Firebase is not configured.')
+    const r = Number(defaultTechnicianServiceRadiusKm)
+    if (!Number.isFinite(r) || r <= 0) {
+      throw new Error('Technician service radius must be a positive number.')
+    }
+    const c = Number(platformCommissionPercent)
+    if (!Number.isFinite(c) || c < 0 || c > 100) {
+      throw new Error('Platform commission must be between 0 and 100.')
+    }
+    const a = Number(addonFeePercent)
+    if (!Number.isFinite(a) || a < 0 || a > 100) {
+      throw new Error('Add-on fee percent must be between 0 and 100.')
+    }
+    await withMutating('platformSettings', async () => {
+      await upsertDoc('settings', 'general', {
+        defaultTechnicianServiceRadiusKm: r,
+        platformCommissionPercent: c,
+        addonFeePercent: a,
+      })
+    })
+    toast.success('Platform settings saved.')
+  }
+
+  const importServicesFromCsv = async (rows, options = {}) => {
+    const { onProgress } = options
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to import services.')
+    }
+    if (!Array.isArray(rows) || rows.length === 0) throw new Error('No valid rows to import.')
+
+    return withMutating('serviceCsvImport', async () => {
+      const existingIds = new Set(data.services.map((s) => s.id))
+      let imported = 0
+      let updated = 0
+      let variationCount = 0
+      const errors = []
+      const total = rows.length
+
+      onProgress?.({ current: 0, total, phase: 'import' })
+
+      for (let i = 0; i < rows.length; i += 1) {
+        const row = rows[i]
+        const parsed = parseServiceCsvRow(row, data.categories)
+        if (!parsed.ok) {
+          errors.push({ row: i + 2, reason: parsed.error })
+          onProgress?.({ current: i + 1, total, phase: 'import' })
+          continue
+        }
+        const wasExisting = existingIds.has(parsed.id)
+        try {
+          await setDocumentReplace('services', parsed.id, parsed.payload)
+        } catch (e) {
+          errors.push({ row: i + 2, reason: e?.message || 'Write failed.' })
+          onProgress?.({ current: i + 1, total, phase: 'import' })
+          continue
+        }
+        existingIds.add(parsed.id)
+        variationCount += parsed.variationCount
+        if (wasExisting) updated += 1
+        else imported += 1
+        onProgress?.({ current: i + 1, total, phase: 'import' })
+      }
+
+      if (imported > 0) {
+        toast.success('Service imported successfully', { description: `${imported} new service(s).` })
+      }
+      if (updated > 0) {
+        toast.success('Existing service updated', { description: `${updated} service(s) updated.` })
+      }
+      if (errors.length) {
+        toast.warning(`${errors.length} row(s) skipped.`, {
+          description: errors
+            .slice(0, 8)
+            .map((s) => `Row ${s.row}: ${s.reason}`)
+            .join(' · '),
+        })
+      }
+      if (!imported && !updated && !errors.length) {
+        toast.message('Nothing imported.')
+      }
+      return {
+        imported,
+        updated,
+        skipped: errors.length,
+        failedRows: errors.length,
+        errors,
+        variationCount,
+      }
+    })
+  }
+
   const metrics = useMemo(() => {
     const completed = data.bookings.filter((booking) => isBookingCompleted(booking))
     const pending = data.bookings.filter((booking) =>
@@ -926,11 +1245,10 @@ export function AppProvider({ children }) {
         return new Date(raw).toDateString() === todayKey
       },
     )
-    const revenueBookings = data.bookings.filter((booking) => isBookingRevenueCounted(booking))
-    const platformEarnings = revenueBookings.reduce((total, booking) => {
-      const { platformCut } = getBookingEarningSplit(booking)
-      return total + platformCut
-    }, 0)
+    const platformEarnings = completed.reduce(
+      (total, booking) => total + getStoredBookingTotalDeduction(booking),
+      0,
+    )
     return {
       totalOrdersCompleted: completed.length,
       pendingBookings: pending.length,
@@ -941,6 +1259,7 @@ export function AppProvider({ children }) {
 
   const value = {
     ...data,
+    platformSettings,
     metrics,
     theme,
     setTheme,
@@ -960,6 +1279,7 @@ export function AppProvider({ children }) {
     updateBookingStatus,
     createBooking,
     updateBookingAddOnApproval,
+    resolveAddOnApprovalRequest,
     backfillMissingBookingCoordinates,
     upsertService,
     deleteService,
@@ -971,6 +1291,11 @@ export function AppProvider({ children }) {
     deleteOffer,
     upsertCoupon,
     deleteCoupon,
+    updatePlatformGeneral,
+    importServicesFromCsv,
+    importAdditionalServicesFromCsv,
+    upsertAdditionalService,
+    deleteAdditionalService,
     createAdminUser,
     updateAdminUser,
   }

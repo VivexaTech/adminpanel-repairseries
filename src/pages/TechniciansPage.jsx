@@ -2,29 +2,58 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Badge } from '../components/ui'
 import { useApp } from '../context/useApp'
-import { currency, getBookingEarningSplit, isBookingRevenueCounted } from '../utils/helpers'
-
-const emptyForm = {
-  id: '',
-  name: '',
-  phone: '',
-  email: '',
-  completedBookings: 0,
-  pendingBookings: 0,
-  status: 'Available',
-  categoryId: '',
-  skills: '',
-  areaAddress: '',
-  latitude: '',
-  longitude: '',
-  serviceRadius: '10',
-}
+import { currency, isBookingCompleted } from '../utils/helpers'
+import { getStoredBookingTotalDeduction, getStoredTechnicianPayout } from '../utils/bookingStoredAmounts'
 
 export function TechniciansPage() {
-  const { technicians, bookings, categories, upsertTechnician, deleteTechnician, loading, mutating } = useApp()
+  const {
+    technicians,
+    bookings,
+    categories,
+    platformSettings,
+    upsertTechnician,
+    deleteTechnician,
+    loading,
+    mutating,
+  } = useApp()
+  const resolvedDefaultRadius = useMemo(() => {
+    const r = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
+    return Number.isFinite(r) && r > 0 ? r : 10
+  }, [platformSettings?.defaultTechnicianServiceRadiusKm])
+
+  const buildEmptyForm = () => ({
+    id: '',
+    name: '',
+    phone: '',
+    email: '',
+    completedBookings: 0,
+    pendingBookings: 0,
+    status: 'Available',
+    categoryId: '',
+    skills: '',
+    areaAddress: '',
+    latitude: '',
+    longitude: '',
+    serviceRadius: String(resolvedDefaultRadius),
+  })
+
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
-  const [form, setForm] = useState(emptyForm)
+  const [form, setForm] = useState(() => ({
+    id: '',
+    name: '',
+    phone: '',
+    email: '',
+    completedBookings: 0,
+    pendingBookings: 0,
+    status: 'Available',
+    categoryId: '',
+    skills: '',
+    areaAddress: '',
+    latitude: '',
+    longitude: '',
+    serviceRadius: '10',
+  }))
 
   const categoryMap = useMemo(
     () => Object.fromEntries(categories.map((c) => [c.id, c.name])),
@@ -62,11 +91,8 @@ export function TechniciansPage() {
 
       if (booking.status === 'Completed') {
         stats[techId].completed += 1
-        if (isBookingRevenueCounted(booking)) {
-          const { platformCut, technicianEarning } = getBookingEarningSplit(booking)
-          stats[techId].technicianEarnings += technicianEarning
-          stats[techId].platformDeduction += platformCut
-        }
+        stats[techId].technicianEarnings += getStoredTechnicianPayout(booking)
+        stats[techId].platformDeduction += getStoredBookingTotalDeduction(booking)
       } else if (['Assigned', 'New', 'Pending', 'Started'].includes(booking.status)) {
         stats[techId].pending += 1
       }
@@ -89,15 +115,16 @@ export function TechniciansPage() {
       areaAddress: form.areaAddress?.trim() || '',
       latitude: form.latitude === '' ? undefined : form.latitude,
       longitude: form.longitude === '' ? undefined : form.longitude,
-      serviceRadius: Number(form.serviceRadius) > 0 ? Number(form.serviceRadius) : 10,
+      serviceRadius:
+        Number(form.serviceRadius) > 0 ? Number(form.serviceRadius) : resolvedDefaultRadius,
     })
-    setForm(emptyForm)
+    setForm(buildEmptyForm())
     setOpen(false)
   }
 
   const edit = (technician) => {
     setForm({
-      ...emptyForm,
+      ...buildEmptyForm(),
       ...technician,
       categoryId: technician.categoryId ?? '',
       areaAddress: technician.areaAddress ?? '',
@@ -108,7 +135,7 @@ export function TechniciansPage() {
       serviceRadius:
         technician.serviceRadius != null && technician.serviceRadius !== ''
           ? String(technician.serviceRadius)
-          : '10',
+          : String(resolvedDefaultRadius),
       completedBookings: technician.completedBookings ?? 0,
       pendingBookings: technician.pendingBookings ?? 0,
     })
@@ -123,7 +150,14 @@ export function TechniciansPage() {
         actions={
           <>
             <SearchInput value={search} onChange={setSearch} placeholder="Search technicians..." />
-            <Button onClick={() => setOpen(true)}>Add Technician</Button>
+            <Button
+              onClick={() => {
+                setForm(buildEmptyForm())
+                setOpen(true)
+              }}
+            >
+              Add Technician
+            </Button>
           </>
         }
       />
@@ -183,10 +217,10 @@ export function TechniciansPage() {
               <p>Completed: {stats.completed}</p>
               <p>Pending: {stats.pending}</p>
               <p className="font-semibold text-emerald-600 dark:text-emerald-300">
-                Total Earnings (70%): {currency(stats.technicianEarnings)}
+                Total earnings (completed, from bookings): {currency(stats.technicianEarnings)}
               </p>
               <p className="font-medium text-slate-600 dark:text-slate-400">
-                Total Deduction (30%): {currency(stats.platformDeduction)}
+                Total deductions (from bookings): {currency(stats.platformDeduction)}
               </p>
               <p className="text-xs text-slate-500 dark:text-slate-500">
                 Completed + paid bookings only
@@ -217,7 +251,7 @@ export function TechniciansPage() {
         title={form.id ? 'Edit Technician' : 'Add Technician'}
         onClose={() => {
           setOpen(false)
-          setForm(emptyForm)
+          setForm(buildEmptyForm())
         }}
       >
         <form className="grid gap-4 md:grid-cols-2" onSubmit={submit}>
