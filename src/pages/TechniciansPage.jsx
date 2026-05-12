@@ -1,13 +1,23 @@
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+<<<<<<< HEAD
 import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select } from '../components/ui'
 import { TechnicianCard } from '../components/TechnicianCard'
 import { useApp } from '../context/useApp'
+=======
+import { Button, Badge, Card, Field, Input, Modal, PageHeader, SearchInput, Select } from '../components/ui'
+import { TechnicianSettlementSection } from '../components/TechnicianSettlementSection'
+import { useApp } from '../context/useApp'
+import { currency } from '../utils/helpers'
+>>>>>>> 4a4f0d8c0be02f36b3ee800b83c8d3ef82c5f535
 import { getStoredBookingTotalDeduction, getStoredTechnicianPayout } from '../utils/bookingStoredAmounts'
 import { subscribeTechnicianBusySlots } from '../services/technicianBusySlots'
 import {
   SCHED_DAY_END_EXCL,
+<<<<<<< HEAD
   SCHED_DAY_START_HOUR,
+=======
+>>>>>>> 4a4f0d8c0be02f36b3ee800b83c8d3ef82c5f535
   slotDisplayKind,
   slotLabelFromIndex,
   TIMEZONE,
@@ -22,7 +32,11 @@ function TechnicianSlotCalendar({ technicianId, dateKey }) {
       (docs) => {
         setBusyDocs(docs.filter((d) => String(d.date || '') === dateKey))
       },
+<<<<<<< HEAD
       () => { },
+=======
+      () => {},
+>>>>>>> 4a4f0d8c0be02f36b3ee800b83c8d3ef82c5f535
     )
   }, [technicianId, dateKey])
 
@@ -213,7 +227,11 @@ export function TechniciansPage() {
     <div className="space-y-4">
       <PageHeader
         title="Technician Management"
+<<<<<<< HEAD
         description="Staff, slots, and settlements — earnings and payouts sync in real time from Firestore."
+=======
+        description="Staff, slots, settlement — payout & earning ledger Firestore mein realtime."
+>>>>>>> 4a4f0d8c0be02f36b3ee800b83c8d3ef82c5f535
         actions={
           <>
             <SearchInput value={search} onChange={setSearch} placeholder="Search technicians..." />
@@ -249,6 +267,7 @@ export function TechniciansPage() {
                 technicianEarnings: 0,
                 platformDeduction: 0,
               }
+<<<<<<< HEAD
             }
             onEdit={() => edit(technician)}
             onSlotCalendar={() => {
@@ -258,6 +277,82 @@ export function TechniciansPage() {
             onDelete={() => deleteTechnician(technician.id)}
             mutating={mutating}
           />
+=======
+              return (
+                <>
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">{technician.name}</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400">{technician.email}</p>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  Category:{' '}
+                  <span className="font-medium text-slate-800 dark:text-slate-200">
+                    {categoryMap[technician.categoryId] || '— Set in edit'}
+                  </span>
+                </p>
+              </div>
+              <Badge tone={technician.status === 'Available' ? 'success' : 'warning'}>
+                {technician.status}
+              </Badge>
+            </div>
+            <div className="mt-4 grid gap-3 text-sm text-slate-600 dark:text-slate-300">
+              <p>Phone: {technician.phone}</p>
+              <p>
+                Service area: {technician.areaAddress?.trim() ? technician.areaAddress : '—'}
+              </p>
+              <p>
+                Radius:{' '}
+                {Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : 10} km
+                {technician.latitude != null &&
+                technician.longitude != null &&
+                Number.isFinite(Number(technician.latitude)) &&
+                Number.isFinite(Number(technician.longitude)) ? (
+                  <span className="text-slate-500 dark:text-slate-400">
+                    {' '}
+                    • {Number(technician.latitude).toFixed(4)}, {Number(technician.longitude).toFixed(4)}
+                  </span>
+                ) : (
+                  <span className="ml-1 text-amber-700 dark:text-amber-300"> • Set lat/lng for geo assign</span>
+                )}
+              </p>
+              <p>Completed: {stats.completed}</p>
+              <p>Pending: {stats.pending}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Bookings se technician share (reference): {currency(stats.technicianEarnings)}
+              </p>
+              <p className="font-medium text-slate-600 dark:text-slate-400">
+                Platform deductions (bookings): {currency(stats.platformDeduction)}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-500">Completed bookings — display only</p>
+              <p>Skills: {technician.skills.join(', ')}</p>
+            </div>
+            <TechnicianSettlementSection technician={technician} />
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Button variant="ghost" onClick={() => edit(technician)}>
+                Edit
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setCalendarDate(new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE }).format(new Date()))
+                  setSlotCalendar({ id: technician.id, name: technician.name })
+                }}
+              >
+                Slot calendar
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => deleteTechnician(technician.id)}
+                disabled={Boolean(mutating.technicianDelete)}
+              >
+                Delete
+              </Button>
+            </div>
+                </>
+              )
+            })()}
+          </Card>
+>>>>>>> 4a4f0d8c0be02f36b3ee800b83c8d3ef82c5f535
         ))}
       </div>
 

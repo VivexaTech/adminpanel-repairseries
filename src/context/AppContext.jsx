@@ -578,6 +578,7 @@ export function AppProvider({ children }) {
   const recordTechnicianPayout = async ({ technicianId, amount, paymentMode, note, maxAmount }) => {
     const n = Number(amount)
     if (!Number.isFinite(n) || n <= 0) {
+<<<<<<< HEAD
       throw new Error('Amount must be greater than zero.')
     }
     const max = Number(maxAmount)
@@ -586,6 +587,16 @@ export function AppProvider({ children }) {
     }
     if (n > max + 0.01) {
       throw new Error('Payment cannot exceed the remaining balance.')
+=======
+      throw new Error('Amount ₹0 se zyada hona chahiye.')
+    }
+    const max = Number(maxAmount)
+    if (!Number.isFinite(max)) {
+      throw new Error('Remaining balance clear nahi hai — page refresh karke try karein.')
+    }
+    if (n > max + 0.01) {
+      throw new Error('Remaining amount se zyada payment nahi kar sakte.')
+>>>>>>> 4a4f0d8c0be02f36b3ee800b83c8d3ef82c5f535
     }
 
     await withMutating('technicianPayout', async () => {
@@ -597,7 +608,22 @@ export function AppProvider({ children }) {
         adminId: session?.id ?? null,
       })
     })
+<<<<<<< HEAD
     toast.success('Payout recorded', { description: 'Settlement has been saved.' })
+=======
+    toast.success('Settlement ho gaya', { description: 'Payout save ho chuka hai.' })
+  }
+
+  const syncTechnicianLedgerFromBookings = async (technicianId) => {
+    const tid = String(technicianId)
+    await withMutating('technicianLedgerSync', async () => {
+      const list = data.bookings.filter((b) => b.technicianId === tid && isBookingCompleted(b))
+      for (const b of list) {
+        await ensureTechnicianEarningForBooking(tid, b)
+      }
+    })
+    toast.success('Ledger sync ho gaya', { description: 'Completed bookings ki earning add / update ho gayi.' })
+>>>>>>> 4a4f0d8c0be02f36b3ee800b83c8d3ef82c5f535
   }
 
   const createBooking = async (booking) => {
@@ -1391,6 +1417,10 @@ export function AppProvider({ children }) {
     assignTechnician,
     updateBookingStatus,
     recordTechnicianPayout,
+<<<<<<< HEAD
+=======
+    syncTechnicianLedgerFromBookings,
+>>>>>>> 4a4f0d8c0be02f36b3ee800b83c8d3ef82c5f535
     createBooking,
     updateBookingAddOnApproval,
     resolveAddOnApprovalRequest,

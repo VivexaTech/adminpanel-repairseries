@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { TIMEZONE } from './technicianSlots'
 
 /** @param {Array<{ type?: string, amount?: number, createdAt?: unknown }>} rows */
@@ -33,6 +34,10 @@ export function ledgerEarningTotalsIST(rows) {
   return { today, month }
 }
 
+=======
+/** @param {Array<{ type?: string, amount?: number, createdAt?: unknown }>} rows */
+
+>>>>>>> 4a4f0d8c0be02f36b3ee800b83c8d3ef82c5f535
 export function summarizeTechnicianTransactions(rows) {
   let totalEarned = 0
   let totalPaid = 0
