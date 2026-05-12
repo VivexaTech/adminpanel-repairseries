@@ -6,7 +6,7 @@ import {
   signOut,
   updateProfile,
 } from 'firebase/auth'
-import { Timestamp, doc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore'
+import { Timestamp, doc, onSnapshot, serverTimestamp, setDoc, writeBatch } from 'firebase/firestore'
 import { toast } from 'sonner'
 import { auth, db, isFirebaseConfigured, secondaryAuth } from '../firebase/config'
 import {
@@ -24,7 +24,14 @@ import { enqueueBookingNotification } from '../services/bookingNotifications'
 import { geocodeAddressString } from '../services/geocode'
 import { playNewBookingSiren, preloadAlertSounds } from '../utils/alertSounds'
 import { formatBookingAddressForDisplay, normalizeBookingAddressForStorage } from '../utils/bookingAddress'
-import { getBookingLatLng, parseCoord } from '../utils/geo'
+import { getBookingLatLng, getTechnicianLatLng, haversineDistanceKm, parseCoord, parseCoordLng } from '../utils/geo'
+import { getSlotDescriptorsForBookingWindow } from '../utils/technicianSlots'
+import { releaseBusySlotsForBooking, reserveBusySlotsForBooking, verifyBusySlotsFree } from '../services/technicianBusySlots'
+import {
+  applyTechnicianEarningToBatch,
+  createTechnicianPayoutRecord,
+  ensureTechnicianEarningForBooking,
+} from '../services/technicianTransactions'
 import {
   approvalLinesToAddOnRows,
   buildFinanceWritePatch,
@@ -39,6 +46,17 @@ function technicianMatchesServiceCategory(technician, service) {
   if (!service?.categoryId) return true
   const cid = String(technician?.categoryId ?? '').trim()
   return Boolean(cid) && cid === service.categoryId
+}
+
+function technicianWithinBookingRadius(technician, bookingLatLng, platformKm) {
+  const { lat: tLat, lng: tLng } = getTechnicianLatLng(technician)
+  if (tLat == null || tLng == null) return false
+  const defaultR = Number(platformKm) > 0 ? Number(platformKm) : 10
+  const techR = Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : defaultR
+  const maxKm = Math.min(techR, defaultR)
+  const { lat: bLat, lng: bLng } = bookingLatLng
+  if (bLat == null || bLng == null) return true
+  return haversineDistanceKm(tLat, tLng, bLat, bLng) <= maxKm
 }
 
 const ROLE_BINDINGS = {
@@ -241,6 +259,8 @@ export function AppProvider({ children }) {
             defaultTechnicianServiceRadiusKm: docRow.defaultTechnicianServiceRadiusKm,
             platformCommissionPercent: docRow.platformCommissionPercent,
             addonFeePercent: docRow.addonFeePercent,
+            globalUpiId: docRow.globalUpiId,
+            globalPaymentQr: docRow.globalPaymentQr,
             updatedAt: docRow.updatedAt,
           })
         }
@@ -290,6 +310,15 @@ export function AppProvider({ children }) {
           setLoading((current) => ({ ...current, [key]: false }))
 
           if (collectionName === 'bookings') {
+            for (const change of changes) {
+              if (change.type === 'removed') continue
+              const booking = { id: change.doc.id, ...change.doc.data() }
+              if (isBookingCompleted(booking) && booking.technicianId) {
+                ensureTechnicianEarningForBooking(String(booking.technicianId), booking).catch((err) =>
+                  console.error('[ledger] ensure earning for completed booking', err),
+                )
+              }
+            }
             if (bookingsBootstrapped.current) {
               changes
                 .filter((change) => change.type === 'added')
@@ -344,14 +373,6 @@ export function AppProvider({ children }) {
       setMutating((current) => ({ ...current, [key]: false }))
     }
   }
-
-  const hasActiveBooking = (technicianId, ignoreBookingId = null) =>
-    data.bookings.some(
-      (booking) =>
-        booking.id !== ignoreBookingId &&
-        booking.technicianId === technicianId &&
-        ['Assigned', 'Pending', 'New', 'Started'].includes(booking.status),
-    )
 
   const upsertTechnician = async (technician) => {
     await withMutating('technician', async () => {
@@ -437,21 +458,66 @@ export function AppProvider({ children }) {
   }
 
   const assignTechnician = async ({ bookingId, technicianId }) => {
-    if (hasActiveBooking(technicianId, bookingId)) {
-      throw new Error('This technician has an active booking. Assign only after completion.')
-    }
-
     const booking = data.bookings.find((b) => b.id === bookingId)
     if (!booking) throw new Error('Booking not found.')
+    const technician = data.technicians.find((t) => t.id === technicianId)
+    if (!technician) throw new Error('Technician not found.')
+    const service = data.services.find((s) => s.id === booking.serviceId)
+    if (!technicianMatchesServiceCategory(technician, service)) {
+      throw new Error('This technician’s category must match the booking’s service category.')
+    }
+    const startDate = booking.scheduledAt?.toDate?.()
+      ? booking.scheduledAt.toDate()
+      : booking.dateTime
+        ? new Date(booking.dateTime)
+        : booking.scheduledAt instanceof Date
+          ? booking.scheduledAt
+          : booking.scheduledAt
+            ? new Date(booking.scheduledAt)
+            : null
+    if (!startDate || Number.isNaN(startDate.getTime())) throw new Error('Invalid booking schedule.')
+
+    const duration = Number(booking.durationMinutes || 60)
+    const descriptors = getSlotDescriptorsForBookingWindow(startDate, duration)
+    if (!descriptors.length) {
+      throw new Error('Booking time falls outside schedulable hourly slots (08:00–22:00 IST).')
+    }
+    const bookingLatLng = getBookingLatLng(booking)
+    const platformKmRaw = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
+    const platformKmResolved = Number.isFinite(platformKmRaw) && platformKmRaw > 0 ? platformKmRaw : 10
+    if (!technicianWithinBookingRadius(technician, bookingLatLng, platformKmResolved)) {
+      throw new Error('This address is outside the technician’s service radius.')
+    }
 
     await withMutating('bookingAssign', async () => {
-      const technician = data.technicians.find((t) => t.id === technicianId)
-      if (!technician) throw new Error('Technician not found.')
-      const service = data.services.find((s) => s.id === booking.serviceId)
-      if (!technicianMatchesServiceCategory(technician, service)) {
-        throw new Error('This technician’s category must match the booking’s service category.')
+      const prevTechId = booking.technicianId ? String(booking.technicianId) : ''
+      const prevStatus = booking.status
+      if (prevTechId) await releaseBusySlotsForBooking(prevTechId, bookingId)
+      const v = await verifyBusySlotsFree(technicianId, descriptors, null)
+      if (!v.ok) {
+        if (prevTechId) {
+          try {
+            await reserveBusySlotsForBooking(prevTechId, bookingId, descriptors, 'booking')
+          } catch {
+            /* best-effort restore */
+          }
+        }
+        throw new Error(v.message || 'Technician is not available for this time slot.')
       }
-      await updateDocFields('bookings', bookingId, { technicianId, status: 'Assigned' })
+      try {
+        await updateDocFields('bookings', bookingId, { technicianId, status: 'Assigned' })
+        await reserveBusySlotsForBooking(technicianId, bookingId, descriptors, 'booking')
+      } catch (err) {
+        await updateDocFields('bookings', bookingId, { technicianId: prevTechId || null, status: prevStatus })
+        if (prevTechId) {
+          try {
+            await reserveBusySlotsForBooking(prevTechId, bookingId, descriptors, 'booking')
+          } catch {
+            /* best-effort */
+          }
+        }
+        throw err
+      }
     })
     toast.success('Technician assigned.')
 
@@ -470,8 +536,22 @@ export function AppProvider({ children }) {
 
   const updateBookingStatus = async ({ bookingId, status }) => {
     const booking = data.bookings.find((b) => b.id === bookingId)
+    const techId = booking?.technicianId ? String(booking.technicianId) : ''
 
-    await withMutating('bookingStatus', async () => updateDocFields('bookings', bookingId, { status }))
+    await withMutating('bookingStatus', async () => {
+      if (status === 'Completed' && techId && db) {
+        const batch = writeBatch(db)
+        batch.update(doc(db, 'bookings', bookingId), { status, updatedAt: serverTimestamp() })
+        applyTechnicianEarningToBatch(batch, techId, { ...booking, status: 'Completed' })
+        await batch.commit()
+      } else {
+        await updateDocFields('bookings', bookingId, { status })
+      }
+      const terminal = ['Completed', 'Cancelled', 'Canceled'].includes(status)
+      if (terminal && techId) {
+        await releaseBusySlotsForBooking(techId, bookingId)
+      }
+    })
     toast.success('Booking updated.')
 
     if (!booking?.customerId) return
@@ -495,11 +575,32 @@ export function AppProvider({ children }) {
     }
   }
 
-  const createBooking = async (booking) => {
-    if (booking.technicianId && hasActiveBooking(booking.technicianId)) {
-      throw new Error('Selected technician is already handling another booking.')
+  const recordTechnicianPayout = async ({ technicianId, amount, paymentMode, note, maxAmount }) => {
+    const n = Number(amount)
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new Error('Amount must be greater than zero.')
+    }
+    const max = Number(maxAmount)
+    if (!Number.isFinite(max)) {
+      throw new Error('Unable to read remaining balance — refresh the page and try again.')
+    }
+    if (n > max + 0.01) {
+      throw new Error('Payment cannot exceed the remaining balance.')
     }
 
+    await withMutating('technicianPayout', async () => {
+      await createTechnicianPayoutRecord({
+        technicianId: String(technicianId),
+        amount: n,
+        paymentMode,
+        note,
+        adminId: session?.id ?? null,
+      })
+    })
+    toast.success('Payout recorded', { description: 'Settlement has been saved.' })
+  }
+
+  const createBooking = async (booking) => {
     let newBookingId = ''
     let autoAssigned = { technicianId: null, assigned: false, status: 'Pending' }
     await withMutating('bookingCreate', async () => {
@@ -539,69 +640,12 @@ export function AppProvider({ children }) {
         visitingCharge,
       )
 
-      const getTimeRangeMs = (b) => {
-        const startDate = b?.scheduledAt?.toDate?.()
-          ? b.scheduledAt.toDate()
-          : b?.dateTime
-            ? new Date(b.dateTime)
-            : b?.scheduledAt instanceof Date
-              ? b.scheduledAt
-              : b?.scheduledAt
-                ? new Date(b.scheduledAt)
-                : null
-        if (!startDate || Number.isNaN(startDate.getTime())) return null
-        const duration = Number(b.durationMinutes ?? b.duration ?? 60)
-        const start = startDate.getTime()
-        return { start, end: start + duration * 60_000 }
-      }
-      const overlaps = (a, b) => a.start < b.end && a.end > b.start
-
-      if (booking.technicianId) {
-        const pickTech = data.technicians.find((t) => t.id === booking.technicianId)
-        if (pickTech && !technicianMatchesServiceCategory(pickTech, service)) {
-          throw new Error('Selected technician’s category must match this service’s category.')
-        }
-      }
-
-      const tryAutoAssign = () => {
-        if (booking.technicianId) return { technicianId: booking.technicianId, assigned: true, status: 'Assigned' }
-        const target = { start: scheduledAtDate.getTime(), end: scheduledAtDate.getTime() + Number(booking.durationMinutes || 60) * 60_000 }
-        const activeStatuses = new Set(['Assigned', 'Pending', 'New', 'Started'])
-        const candidates = data.technicians.filter(
-          (t) => t.status === 'Available' && technicianMatchesServiceCategory(t, service),
-        )
-        const scored = []
-        for (const tech of candidates) {
-          const techBookings = data.bookings
-            .filter((b) => b.technicianId === tech.id && activeStatuses.has(b.status))
-          const conflicts = techBookings.some((b) => {
-            const r = getTimeRangeMs(b)
-            if (!r) return false
-            return overlaps(target, r)
-          })
-          if (conflicts) continue
-          // least-busy heuristic: count active bookings on same day
-          const dayKey = scheduledAtDate.toDateString()
-          const busyCount = techBookings.filter((b) => {
-            const r = getTimeRangeMs(b)
-            if (!r) return false
-            return new Date(r.start).toDateString() === dayKey
-          }).length
-          scored.push({ techId: tech.id, busyCount })
-        }
-        if (!scored.length) return { technicianId: null, assigned: false, status: 'Pending' }
-        scored.sort((a, b) => a.busyCount - b.busyCount)
-        return { technicianId: scored[0].techId, assigned: true, status: 'Assigned' }
-      }
-
-      autoAssigned = tryAutoAssign()
-
       const normalizedAddr = normalizeBookingAddressForStorage(booking.address)
       const addrForGeo = formatBookingAddressForDisplay(normalizedAddr)
       if (addrForGeo === '—') throw new Error('Address is required.')
 
       let lat = parseCoord(booking.latitude)
-      let lng = parseCoord(booking.longitude)
+      let lng = parseCoordLng(booking.longitude)
       if (lat == null || lng == null) {
         try {
           const geo = await geocodeAddressString(addrForGeo)
@@ -613,6 +657,49 @@ export function AppProvider({ children }) {
         }
       }
 
+      const durationMinutes = Number(booking.durationMinutes || 60)
+      const descriptors = getSlotDescriptorsForBookingWindow(scheduledAtDate, durationMinutes)
+      if (!descriptors.length) {
+        throw new Error('Booking time falls outside schedulable hourly slots (08:00–22:00 IST).')
+      }
+
+      const platformKmRaw = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
+      const platformKmResolved =
+        Number.isFinite(platformKmRaw) && platformKmRaw > 0 ? platformKmRaw : 10
+      const bookingLatLng = { lat, lng }
+
+      if (booking.technicianId) {
+        const pickTech = data.technicians.find((t) => t.id === booking.technicianId)
+        if (!pickTech) throw new Error('Selected technician not found.')
+        if (!technicianMatchesServiceCategory(pickTech, service)) {
+          throw new Error('Selected technician’s category must match this service’s category.')
+        }
+        if (!technicianWithinBookingRadius(pickTech, bookingLatLng, platformKmResolved)) {
+          throw new Error('Selected technician is outside the service radius for this address.')
+        }
+        const v = await verifyBusySlotsFree(booking.technicianId, descriptors, null)
+        if (!v.ok) throw new Error(v.message || 'Technician is not available for this time slot.')
+      }
+
+      const tryAutoAssign = async () => {
+        if (booking.technicianId) {
+          return { technicianId: booking.technicianId, assigned: true, status: 'Assigned' }
+        }
+        if (!service) {
+          return { technicianId: null, assigned: false, status: 'Pending' }
+        }
+        const candidates = data.technicians.filter((t) => technicianMatchesServiceCategory(t, service))
+        const sorted = [...candidates].sort((a, b) => String(a.id).localeCompare(String(b.id)))
+        for (const tech of sorted) {
+          if (!technicianWithinBookingRadius(tech, bookingLatLng, platformKmResolved)) continue
+          const v = await verifyBusySlotsFree(tech.id, descriptors, null)
+          if (v.ok) return { technicianId: tech.id, assigned: true, status: 'Assigned' }
+        }
+        return { technicianId: null, assigned: false, status: 'Pending' }
+      }
+
+      autoAssigned = await tryAutoAssign()
+
       const payload = {
         customerId: booking.customerId,
         serviceId: booking.serviceId || '',
@@ -623,7 +710,7 @@ export function AppProvider({ children }) {
         address: normalizedAddr,
         notes: booking.notes || '',
         scheduledAt: Timestamp.fromDate(scheduledAtDate),
-        durationMinutes: Number(booking.durationMinutes || 60),
+        durationMinutes,
         amount: servicePrice,
         visitingCharge,
         addOnServices: [],
@@ -638,6 +725,14 @@ export function AppProvider({ children }) {
 
       newBookingId = await createDoc('bookings', payload)
       await upsertDoc('bookings', newBookingId, { bookingCode: `BK-${newBookingId.slice(-6).toUpperCase()}` })
+      if (autoAssigned.technicianId) {
+        try {
+          await reserveBusySlotsForBooking(autoAssigned.technicianId, newBookingId, descriptors, 'booking')
+        } catch (err) {
+          await removeDoc('bookings', newBookingId)
+          throw err
+        }
+      }
     })
     toast.success('Booking created.')
 
@@ -1164,6 +1259,24 @@ export function AppProvider({ children }) {
     toast.success('Platform settings saved.')
   }
 
+  const updateGlobalPaymentSettings = async ({ globalUpiId, globalPaymentQr }) => {
+    if (session?.role !== ROLES.SUPER_ADMIN) {
+      throw new Error('Only Super Admins can update platform settings.')
+    }
+    if (!isFirebaseConfigured || !db) throw new Error('Firebase is not configured.')
+    const gid = String(globalUpiId ?? '')
+      .trim()
+      .toLowerCase()
+    const gqr = String(globalPaymentQr ?? '').trim()
+    await withMutating('platformSettings', async () => {
+      await upsertDoc('settings', 'general', {
+        globalUpiId: gid,
+        globalPaymentQr: gqr,
+      })
+    })
+    toast.success('Global payment settings saved.')
+  }
+
   const importServicesFromCsv = async (rows, options = {}) => {
     const { onProgress } = options
     if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
@@ -1277,6 +1390,7 @@ export function AppProvider({ children }) {
     updateCustomerDetails,
     assignTechnician,
     updateBookingStatus,
+    recordTechnicianPayout,
     createBooking,
     updateBookingAddOnApproval,
     resolveAddOnApprovalRequest,
@@ -1292,6 +1406,7 @@ export function AppProvider({ children }) {
     upsertCoupon,
     deleteCoupon,
     updatePlatformGeneral,
+    updateGlobalPaymentSettings,
     importServicesFromCsv,
     importAdditionalServicesFromCsv,
     upsertAdditionalService,

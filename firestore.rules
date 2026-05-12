@@ -104,6 +104,18 @@ service cloud.firestore {
       allow write: if isSuperAdmin() || isTechnicianManager();
     }
 
+    match /technicians/{techId}/busySlots/{slotId} {
+      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager();
+      allow write: if isSuperAdmin() || isBookingManager() || isTechnicianManager();
+    }
+
+    match /technicians/{techId}/transactions/{txId} {
+      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager()
+        || (isTechnicianActor() && request.auth.uid == techId);
+      allow create: if isSuperAdmin() || isBookingManager() || isTechnicianManager();
+      allow update, delete: if false;
+    }
+
     match /bookings/{docId} {
       allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager()
         || technicianOwnsBookingData(resource.data);

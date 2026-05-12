@@ -1,9 +1,72 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Badge } from '../components/ui'
+import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select } from '../components/ui'
+import { TechnicianCard } from '../components/TechnicianCard'
 import { useApp } from '../context/useApp'
-import { currency, isBookingCompleted } from '../utils/helpers'
 import { getStoredBookingTotalDeduction, getStoredTechnicianPayout } from '../utils/bookingStoredAmounts'
+import { subscribeTechnicianBusySlots } from '../services/technicianBusySlots'
+import {
+  SCHED_DAY_END_EXCL,
+  SCHED_DAY_START_HOUR,
+  slotDisplayKind,
+  slotLabelFromIndex,
+  TIMEZONE,
+} from '../utils/technicianSlots'
+
+function TechnicianSlotCalendar({ technicianId, dateKey }) {
+  const [busyDocs, setBusyDocs] = useState([])
+  useEffect(() => {
+    if (!technicianId) return undefined
+    return subscribeTechnicianBusySlots(
+      technicianId,
+      (docs) => {
+        setBusyDocs(docs.filter((d) => String(d.date || '') === dateKey))
+      },
+      () => { },
+    )
+  }, [technicianId, dateKey])
+
+  const bySlotIndex = useMemo(() => {
+    const m = new Map()
+    for (const d of busyDocs) {
+      const i = Number(d.slotIndex)
+      if (Number.isFinite(i)) m.set(i, d)
+    }
+    return m
+  }, [busyDocs])
+
+  const nSlots = SCHED_DAY_END_EXCL - SCHED_DAY_START_HOUR
+  return (
+    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+      {Array.from({ length: nSlots }, (_, i) => {
+        const slotIndex = i + 1
+        const doc = bySlotIndex.get(slotIndex)
+        const kind = doc ? slotDisplayKind(doc.reason, doc.status) : 'free'
+        const label = slotLabelFromIndex(slotIndex)
+        const styles =
+          kind === 'free'
+            ? 'border-emerald-500/50 bg-emerald-500/10'
+            : kind === 'booking'
+              ? 'border-orange-500/50 bg-orange-500/10'
+              : 'border-red-500/50 bg-red-500/10'
+        const sub =
+          kind === 'free'
+            ? 'Available'
+            : kind === 'booking'
+              ? doc?.bookingId
+                ? `Booked · ${doc.bookingId}`
+                : 'Booked'
+              : 'Manual block'
+        return (
+          <div key={slotIndex} className={`rounded-xl border px-3 py-2 text-sm ${styles}`}>
+            <div className="font-medium text-slate-900 dark:text-slate-100">{label}</div>
+            <div className="text-xs text-slate-600 dark:text-slate-400">{sub}</div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 export function TechniciansPage() {
   const {
@@ -38,6 +101,10 @@ export function TechniciansPage() {
   })
 
   const [search, setSearch] = useState('')
+  const [slotCalendar, setSlotCalendar] = useState(null)
+  const [calendarDate, setCalendarDate] = useState(() =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE }).format(new Date()),
+  )
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState(() => ({
     id: '',
@@ -146,7 +213,7 @@ export function TechniciansPage() {
     <div className="space-y-4">
       <PageHeader
         title="Technician Management"
-        description="Manage staff capacity, availability, and assigned skills."
+        description="Staff, slots, and settlements — earnings and payouts sync in real time from Firestore."
         actions={
           <>
             <SearchInput value={search} onChange={setSearch} placeholder="Search technicians..." />
@@ -162,87 +229,35 @@ export function TechniciansPage() {
         }
       />
 
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className="grid w-full min-w-0 gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr))]">
         {loading.technicians ? (
-          <Card>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Loading technicians...</p>
-          </Card>
+          <div className="[grid-column:1/-1]">
+            <Card>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Loading technicians...</p>
+            </Card>
+          </div>
         ) : null}
         {filtered.map((technician) => (
-          <Card key={technician.id}>
-            {/** Live stats are derived from bookings for accuracy. */}
-            {(() => {
-              const stats = technicianStats[technician.id] || {
+          <TechnicianCard
+            key={technician.id}
+            technician={technician}
+            categoryLabel={categoryMap[technician.categoryId] || '— Set in edit'}
+            bookingStats={
+              technicianStats[technician.id] || {
                 completed: 0,
                 pending: 0,
-                earnings: 0,
+                technicianEarnings: 0,
+                platformDeduction: 0,
               }
-              return (
-                <>
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">{technician.name}</h3>
-                <p className="text-sm text-slate-500 dark:text-slate-400">{technician.email}</p>
-                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                  Category:{' '}
-                  <span className="font-medium text-slate-800 dark:text-slate-200">
-                    {categoryMap[technician.categoryId] || '— Set in edit'}
-                  </span>
-                </p>
-              </div>
-              <Badge tone={technician.status === 'Available' ? 'success' : 'warning'}>
-                {technician.status}
-              </Badge>
-            </div>
-            <div className="mt-4 grid gap-3 text-sm text-slate-600 dark:text-slate-300">
-              <p>Phone: {technician.phone}</p>
-              <p>
-                Service area: {technician.areaAddress?.trim() ? technician.areaAddress : '—'}
-              </p>
-              <p>
-                Radius:{' '}
-                {Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : 10} km
-                {technician.latitude != null &&
-                technician.longitude != null &&
-                Number.isFinite(Number(technician.latitude)) &&
-                Number.isFinite(Number(technician.longitude)) ? (
-                  <span className="text-slate-500 dark:text-slate-400">
-                    {' '}
-                    • {Number(technician.latitude).toFixed(4)}, {Number(technician.longitude).toFixed(4)}
-                  </span>
-                ) : (
-                  <span className="ml-1 text-amber-700 dark:text-amber-300"> • Set lat/lng for geo assign</span>
-                )}
-              </p>
-              <p>Completed: {stats.completed}</p>
-              <p>Pending: {stats.pending}</p>
-              <p className="font-semibold text-emerald-600 dark:text-emerald-300">
-                Total earnings (completed, from bookings): {currency(stats.technicianEarnings)}
-              </p>
-              <p className="font-medium text-slate-600 dark:text-slate-400">
-                Total deductions (from bookings): {currency(stats.platformDeduction)}
-              </p>
-              <p className="text-xs text-slate-500 dark:text-slate-500">
-                Completed + paid bookings only
-              </p>
-              <p>Skills: {technician.skills.join(', ')}</p>
-            </div>
-            <div className="mt-5 flex gap-2">
-              <Button variant="ghost" onClick={() => edit(technician)}>
-                Edit
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => deleteTechnician(technician.id)}
-                disabled={Boolean(mutating.technicianDelete)}
-              >
-                Delete
-              </Button>
-            </div>
-                </>
-              )
-            })()}
-          </Card>
+            }
+            onEdit={() => edit(technician)}
+            onSlotCalendar={() => {
+              setCalendarDate(new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE }).format(new Date()))
+              setSlotCalendar({ id: technician.id, name: technician.name })
+            }}
+            onDelete={() => deleteTechnician(technician.id)}
+            mutating={mutating}
+          />
         ))}
       </div>
 
@@ -282,6 +297,7 @@ export function TechniciansPage() {
             <Select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
               <option>Available</option>
               <option>Busy</option>
+              <option>Offline</option>
             </Select>
           </Field>
           <Field label="Completed Bookings">
@@ -340,6 +356,35 @@ export function TechniciansPage() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        open={Boolean(slotCalendar)}
+        title={slotCalendar ? `Hourly slots — ${slotCalendar.name}` : ''}
+        onClose={() => setSlotCalendar(null)}
+        bodyClassName="max-h-[70vh] overflow-y-auto pr-1"
+      >
+        {slotCalendar ? (
+          <>
+            <Field label={`Date (IST · ${TIMEZONE})`}>
+              <Input
+                type="date"
+                value={calendarDate}
+                onChange={(e) => setCalendarDate(e.target.value)}
+              />
+            </Field>
+            <p className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span className="rounded border border-emerald-500/50 bg-emerald-500/10 px-2 py-0.5">
+                Available
+              </span>
+              <span className="rounded border border-orange-500/50 bg-orange-500/10 px-2 py-0.5">
+                Booked
+              </span>
+              <span className="rounded border border-red-500/50 bg-red-500/10 px-2 py-0.5">Manual</span>
+            </p>
+            <TechnicianSlotCalendar technicianId={slotCalendar.id} dateKey={calendarDate} />
+          </>
+        ) : null}
       </Modal>
     </div>
   )

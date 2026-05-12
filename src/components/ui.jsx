@@ -59,7 +59,7 @@ export function Button({
   )
 }
 
-export function Badge({ children, tone = 'neutral' }) {
+export function Badge({ children, tone = 'neutral', className }) {
   const tones = {
     neutral: 'bg-[var(--surface-high)] text-[var(--on-surface)]',
     success: 'bg-[color-mix(in_srgb,var(--success)_16%,transparent)] text-[var(--success)]',
@@ -69,7 +69,7 @@ export function Badge({ children, tone = 'neutral' }) {
   }
 
   return (
-    <span className={cn('rounded-full px-3 py-1 text-xs font-semibold', tones[tone])}>
+    <span className={cn('rounded-full px-3 py-1 text-xs font-semibold', tones[tone], className)}>
       {children}
     </span>
   )
