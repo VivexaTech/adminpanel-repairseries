@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Badge } from '../components/ui'
 import { useApp } from '../context/useApp'
 import { exportRows } from '../services/csv'
+import { bookingAddressSearchText, formatBookingAddressForDisplay } from '../utils/bookingAddress'
 
 export function CustomersPage() {
   const { customers, session, toggleCustomerBlock, deleteCustomer, createCustomer, updateCustomerDetails, loading, mutating } = useApp()
@@ -16,7 +17,7 @@ export function CustomersPage() {
   const filteredCustomers = useMemo(
     () =>
       customers.filter((customer) =>
-        [customer.name, customer.phone, customer.email, customer.address]
+        [customer.name, customer.phone, customer.email, bookingAddressSearchText(customer.address)]
           .join(' ')
           .toLowerCase()
           .includes(search.toLowerCase()),
@@ -132,7 +133,9 @@ export function CustomersPage() {
                 <Badge tone={customer.blocked ? 'danger' : 'success'}>{customer.blocked ? 'Blocked' : 'Active'}</Badge>
               </div>
 
-              <p className="mt-3 text-sm leading-relaxed text-[var(--on-surface)]">{customer.address}</p>
+              <p className="mt-3 text-sm leading-relaxed text-[var(--on-surface)]">
+                {formatBookingAddressForDisplay(customer.address)}
+              </p>
 
               <div className="mt-4 flex items-center justify-between gap-3 text-sm text-[var(--on-surface-variant)]">
                 <span>Bookings: {customer.totalBookings}</span>
@@ -200,7 +203,7 @@ export function CustomersPage() {
                   <td className="px-5 py-4 font-medium text-[var(--on-surface)]">{customer.name}</td>
                   <td className="px-5 py-4">{customer.phone}</td>
                   <td className="px-5 py-4">{customer.email}</td>
-                  <td className="px-5 py-4">{customer.address}</td>
+                  <td className="px-5 py-4">{formatBookingAddressForDisplay(customer.address)}</td>
                   <td className="px-5 py-4">{customer.totalBookings}</td>
                   <td className="px-5 py-4">
                     <Badge tone={customer.blocked ? 'danger' : 'success'}>

@@ -6,6 +6,27 @@ import {
 } from './bookingFinance'
 
 export const cn = (...inputs) => clsx(inputs)
+
+/** Comma-separated form input → string array for Firestore. */
+export function parseSkillsInput(skills) {
+  if (Array.isArray(skills)) {
+    return skills.map((s) => String(s).trim()).filter(Boolean)
+  }
+  if (typeof skills === 'string') {
+    return skills
+      .split(/[,;]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+/** Skills field for display/search (string or array). */
+export function formatSkillsDisplay(skills) {
+  if (Array.isArray(skills)) return skills.filter(Boolean).join(', ')
+  if (typeof skills === 'string') return skills.trim()
+  return ''
+}
 const safeMoney = (value) => {
   if (value == null || value === '') return 0
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0

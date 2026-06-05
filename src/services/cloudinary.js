@@ -12,7 +12,7 @@ export const uploadToCloudinary = async (file) => {
   if (!file) return ''
 
   if (!isCloudinaryConfigured) {
-    return Promise.resolve(URL.createObjectURL(file))
+    throw new Error('Cloudinary is not configured. Set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET.')
   }
 
   const formData = new FormData()

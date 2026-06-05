@@ -240,7 +240,6 @@ export function PlatformSettingsPage() {
               Saved as lowercase (e.g. Vivek@Paytm → vivek@paytm).
             </span>
           </Field>
-{/* 
           <div>
             <span className="mb-2 block text-sm font-medium text-[var(--on-surface)]">Upload payment QR</span>
             <input
@@ -266,9 +265,9 @@ export function PlatformSettingsPage() {
                 Storage bucket missing in environment — QR upload disabled.
               </p>
             ) : null}
-          </div> */}
+          </div>
 
-          {/* <div>
+          <div>
             <p className="mb-2 text-sm font-medium text-[var(--on-surface)]">QR preview</p>
             <div className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border border-[var(--outline-variant)]/60 bg-[var(--surface-low)]/40 p-4 sm:p-6">
               {qrImageUrl ? (
@@ -301,7 +300,7 @@ export function PlatformSettingsPage() {
                 <p className="text-center text-sm text-[var(--on-surface-variant)]">No QR image uploaded yet.</p>
               )}
             </div>
-          </div> */}
+          </div>
 
           <Button type="submit" disabled={busy || settingsLoading} className="w-full sm:w-auto">
             {busy ? 'Saving…' : 'Save changes'}

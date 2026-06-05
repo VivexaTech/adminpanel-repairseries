@@ -42,7 +42,7 @@ export function validatePaymentQrFile(file) {
  */
 export async function uploadGlobalPaymentQrImage(file) {
   ensureStorage()
-  const safeName = String(file.name || 'qr').replace(/[^\w.\-]+/g, '_')
+  const safeName = String(file.name || 'qr').replace(/[^\w.-]+/g, '_')
   const path = `platform-settings/payment-qr/${Date.now()}_${safeName}`
   const storageRef = ref(storage, path)
   await uploadBytes(storageRef, file, { contentType: file.type || 'image/png' })

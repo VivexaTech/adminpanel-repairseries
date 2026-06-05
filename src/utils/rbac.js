@@ -39,6 +39,9 @@ export function canAccessPath(role, pathname) {
   if (role === ROLES.SERVICE_MANAGER) {
     return ['/services', '/additional-services', '/import-services', '/offers', '/coupons'].includes(normalized)
   }
+  if (role === 'supportManager') {
+    return ['/bookings', '/customers'].includes(normalized)
+  }
   return false
 }
 
@@ -52,6 +55,8 @@ export function getDefaultRoute(role) {
       return '/bookings'
     case ROLES.SERVICE_MANAGER:
       return '/services'
+    case 'supportManager':
+      return '/bookings'
     default:
       return '/login'
   }

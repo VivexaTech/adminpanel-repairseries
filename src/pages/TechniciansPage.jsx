@@ -4,6 +4,7 @@ import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select } fr
 import { TechnicianCard } from '../components/TechnicianCard'
 import { useApp } from '../context/useApp'
 import { getStoredBookingTotalDeduction, getStoredTechnicianPayout } from '../utils/bookingStoredAmounts'
+import { formatSkillsDisplay } from '../utils/helpers'
 import { subscribeTechnicianBusySlots } from '../services/technicianBusySlots'
 import { normalizeShiftStatus } from '../utils/technicianVerification'
 import {
@@ -135,7 +136,7 @@ export function TechniciansPage() {
           technician.name,
           technician.email,
           technician.phone,
-          technician.skills.join(' '),
+          formatSkillsDisplay(technician.skills),
           technician.areaAddress || '',
           categoryMap[technician.categoryId] || '',
         ]
@@ -207,6 +208,7 @@ export function TechniciansPage() {
           : String(resolvedDefaultRadius),
       completedBookings: technician.completedBookings ?? 0,
       pendingBookings: technician.pendingBookings ?? 0,
+      skills: formatSkillsDisplay(technician.skills),
     })
     setOpen(true)
   }

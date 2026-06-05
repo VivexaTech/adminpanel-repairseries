@@ -16,6 +16,7 @@ import {
   getBookingPendingAddOns,
   getBookingVisitingCharge,
   normalizeBookingAddOnServices,
+  formatSkillsDisplay,
 } from '../utils/helpers'
 import {
   addressToFormString,
@@ -754,7 +755,13 @@ export function BookingsPage() {
                 <Button
                   variant="secondary"
                   disabled={Boolean(mutating.bookingStatus)}
-                  onClick={() => updateBookingStatus({ bookingId: booking.id, status: 'Started' })}
+                  onClick={async () => {
+                    try {
+                      await updateBookingStatus({ bookingId: booking.id, status: 'Started' })
+                    } catch (e) {
+                      toast.error(e.message)
+                    }
+                  }}
                 >
                   Mark started
                 </Button>
@@ -763,7 +770,13 @@ export function BookingsPage() {
                 <Button
                   variant="ghost"
                   disabled={Boolean(mutating.bookingStatus)}
-                  onClick={() => updateBookingStatus({ bookingId: booking.id, status: 'Completed' })}
+                  onClick={async () => {
+                    try {
+                      await updateBookingStatus({ bookingId: booking.id, status: 'Completed' })
+                    } catch (e) {
+                      toast.error(e.message)
+                    }
+                  }}
                 >
                   Mark completed
                 </Button>
@@ -939,8 +952,15 @@ export function BookingsPage() {
                 <Button
                   disabled={!selectedTechnician || availability.loading || Boolean(mutating.bookingAssign)}
                   onClick={async () => {
-                    await assignTechnician({ bookingId: modalState.booking.id, technicianId: selectedTechnician })
-                    setModalState({ mode: null, booking: null })
+                    try {
+                      await assignTechnician({
+                        bookingId: modalState.booking.id,
+                        technicianId: selectedTechnician,
+                      })
+                      setModalState({ mode: null, booking: null })
+                    } catch (e) {
+                      toast.error(e.message)
+                    }
                   }}
                 >
                   {mutating.bookingAssign ? 'Assigning...' : 'Confirm Assignment'}
@@ -1105,7 +1125,7 @@ export function BookingsPage() {
               <option value="">Not assigned</option>
               {createAvailableTechnicians.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.name} • {categoryMap[t.categoryId] || '—'} • {(t.skills || []).join(', ') || '—'}
+                  {t.name} • {categoryMap[t.categoryId] || '—'} • {formatSkillsDisplay(t.skills) || '—'}
                 </option>
               ))}
             </Select>

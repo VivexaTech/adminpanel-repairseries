@@ -6,6 +6,7 @@ import { Button, Badge, Field, Input, Modal, Select, Card } from './ui'
 import { TechnicianVerificationDrawer } from './TechnicianVerificationDrawer'
 import { useApp } from '../context/useApp'
 import { subscribeDoc } from '../services/firestore'
+import { subscribeTechnicianKycSubdocs } from '../services/technicianKyc'
 import { subscribeTechnicianBusySlots } from '../services/technicianBusySlots'
 import { subscribeTechnicianTransactions } from '../services/technicianTransactions'
 import {
@@ -22,7 +23,7 @@ import {
   verificationAccountBadge,
 } from '../utils/technicianVerification'
 import { ROLES } from '../utils/rbac'
-import { cn, currency, formatDateTime } from '../utils/helpers'
+import { cn, currency, formatDateTime, formatSkillsDisplay } from '../utils/helpers'
 
 const PAYMENT_MODES = [
   { value: '', label: 'Optional' },
@@ -179,6 +180,7 @@ export function TechnicianCard({
   const [paymentMode, setPaymentMode] = useState('')
   // 👇 Updated to read from kyc.bankDetails instead of paymentDetails
   const [liveBankDetails, setLiveBankDetails] = useState(null)
+  const [subdocBankDetails, setSubdocBankDetails] = useState(null)
   const [liveUpdatedAt, setLiveUpdatedAt] = useState(null)
   const [upiQrDataUrl, setUpiQrDataUrl] = useState(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -199,6 +201,20 @@ export function TechnicianCard({
     )
     return () => unsub()
   }, [technician.id])
+
+  useEffect(() => {
+    if (!payOpen || !technician.id) {
+      setSubdocBankDetails(null)
+      return undefined
+    }
+    return subscribeTechnicianKycSubdocs(
+      technician.id,
+      ({ bankDetails: b }) => {
+        setSubdocBankDetails(b && typeof b === 'object' ? b : null)
+      },
+      () => {},
+    )
+  }, [payOpen, technician.id])
 
   useEffect(() => {
     if (!payOpen || !technician.id) {
@@ -229,7 +245,7 @@ export function TechnicianCard({
   const sortedTx = useMemo(() => sortTransactionsNewestFirst(rows), [rows])
   const earningWindow = useMemo(() => ledgerEarningTotalsIST(rows), [rows])
 
-  const skillsLine = Array.isArray(technician.skills) ? technician.skills.join(', ') : ''
+  const skillsLine = formatSkillsDisplay(technician.skills)
   const phoneDisplay = String(technician.phone ?? '').trim() || '—'
 
   const photoUrl = String(
@@ -267,11 +283,11 @@ export function TechnicianCard({
     }
   }
 
-  // 👇 Passed liveBankDetails instead of paymentDetails
-  const bankSafe = readBankDetails(liveBankDetails)
+  const resolvedBankDetails = liveBankDetails || subdocBankDetails
+  const bankSafe = readBankDetails(resolvedBankDetails)
   const hasBank = bankDetailsComplete(bankSafe)
 
-  const techUpiNormalized = normalizeUpiId(readUpiId(liveBankDetails))
+  const techUpiNormalized = normalizeUpiId(readUpiId(resolvedBankDetails))
   const globalUpiNormalized = normalizeUpiId(platformSettings?.globalUpiId)
   const resolvedUpiId = techUpiNormalized || globalUpiNormalized
   const globalQrImageUrl = String(platformSettings?.globalPaymentQr ?? '').trim()

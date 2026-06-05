@@ -34,7 +34,7 @@ import { geocodeAddressString } from '../services/geocode'
 import { playNewBookingSiren, preloadAlertSounds } from '../utils/alertSounds'
 import { formatBookingAddressForDisplay, normalizeBookingAddressForStorage } from '../utils/bookingAddress'
 import { getBookingLatLng, getTechnicianLatLng, haversineDistanceKm, parseCoord, parseCoordLng } from '../utils/geo'
-import { getSlotDescriptorsForBookingWindow } from '../utils/technicianSlots'
+import { getSlotDescriptorsForBookingWindow, TIMEZONE } from '../utils/technicianSlots'
 import { releaseBusySlotsForBooking, reserveBusySlotsForBooking, verifyBusySlotsFree } from '../services/technicianBusySlots'
 import {
   applyTechnicianEarningToBatch,
@@ -47,7 +47,7 @@ import {
   buildInitialBookingFinanceFields,
 } from '../utils/bookingFinance'
 import { getStoredBookingTotalDeduction } from '../utils/bookingStoredAmounts'
-import { isBookingCompleted } from '../utils/helpers'
+import { isBookingCompleted, parseSkillsInput } from '../utils/helpers'
 import { ASSIGNABLE_ROLES, ROLES } from '../utils/rbac'
 import { markSoundPlayed, wasSoundPlayed } from '../utils/soundDedupe'
 import { isTechnicianAssignable } from '../utils/technicianVerification'
@@ -101,6 +101,13 @@ const ROLE_BINDINGS = {
     { key: 'offers', collectionName: 'offers' },
     { key: 'coupons', collectionName: 'coupons' },
     { key: 'faqs', collectionName: 'faqs' },
+  ],
+  supportManager: [
+    { key: 'bookings', collectionName: 'bookings' },
+    { key: 'customers', collectionName: 'customers' },
+    { key: 'technicians', collectionName: 'technicians' },
+    { key: 'services', collectionName: 'services' },
+    { key: 'categories', collectionName: 'categories' },
   ],
 }
 
@@ -398,7 +405,7 @@ export function AppProvider({ children }) {
         completedBookings: Number(technician.completedBookings || 0),
         pendingBookings: Number(technician.pendingBookings || 0),
         shiftStatus: technician.status || 'Available',
-        skills: technician.skills || [],
+        skills: parseSkillsInput(technician.skills),
         categoryId: String(technician.categoryId || '').trim(),
         areaAddress: technician.areaAddress || '',
         serviceRadius: Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : fallbackRadius,
@@ -694,6 +701,21 @@ export function AppProvider({ children }) {
       })
     })
     toast.success('Payout recorded', { description: 'Settlement has been saved.' })
+  }
+
+  const syncTechnicianLedgerFromBookings = async (technicianId) => {
+    const techId = String(technicianId || '').trim()
+    if (!techId) throw new Error('Technician id is required.')
+
+    await withMutating('technicianLedgerSync', async () => {
+      const completed = data.bookings.filter(
+        (booking) => isBookingCompleted(booking) && String(booking.technicianId || '') === techId,
+      )
+      for (const booking of completed) {
+        await ensureTechnicianEarningForBooking(techId, booking)
+      }
+    })
+    toast.success('Ledger synced from completed bookings.')
   }
 
   const createBooking = async (booking) => {
@@ -1455,14 +1477,13 @@ export function AppProvider({ children }) {
     const pending = data.bookings.filter((booking) =>
       ['Pending', 'New', 'Assigned', 'Started'].includes(booking.status),
     )
-    const todayKey = new Date().toDateString()
-    const todayBookings = data.bookings.filter(
-      (booking) => {
-        const raw = booking.scheduledAt?.toDate?.() || booking.dateTime || booking.scheduledAt
-        if (!raw) return false
-        return new Date(raw).toDateString() === todayKey
-      },
-    )
+    const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE }).format(new Date())
+    const todayBookings = data.bookings.filter((booking) => {
+      const raw = booking.scheduledAt?.toDate?.() || booking.dateTime || booking.scheduledAt
+      if (!raw) return false
+      const bookingKey = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE }).format(new Date(raw))
+      return bookingKey === todayKey
+    })
     const platformEarnings = completed.reduce(
       (total, booking) => total + getStoredBookingTotalDeduction(booking),
       0,
@@ -1499,6 +1520,7 @@ export function AppProvider({ children }) {
     suspendTechnician,
     updateBookingStatus,
     recordTechnicianPayout,
+    syncTechnicianLedgerFromBookings,
     createBooking,
     updateBookingAddOnApproval,
     resolveAddOnApprovalRequest,
