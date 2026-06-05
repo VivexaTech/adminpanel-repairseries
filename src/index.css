@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Segoe UI", sans-serif;
+  --color-primary: #c94e1f;
+  --color-primary-container: #ff7946;
+  --color-secondary: #2f3e46;
+  --color-background: #f8f9fa;
+  --color-surface: #ffffff;
+  --color-surface-lowest: #ffffff;
+  --color-surface-low: #f1f3f5;
+  --color-surface-high: #e9ecef;
+  --color-on-surface: #1f2328;
+  --color-on-surface-variant: #5c6770;
+  --color-outline-variant: #adb5bd;
+  --color-border: #dee2e6;
+  --color-error: #e63946;
+  --color-warning: #f4a261;
+  --color-success: #2fbf71;
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --primary: #c94e1f;
+  --primary-container: #ff7946;
+  --secondary: #2f3e46;
+  --background: #f8f9fa;
+  --surface: #ffffff;
+  --surface-lowest: #ffffff;
+  --surface-low: #f1f3f5;
+  --surface-high: #e9ecef;
+  --on-surface: #1f2328;
+  --on-surface-variant: #5c6770;
+  --border: #dee2e6;
+  --outline-variant: #adb5bd;
+  --error: #e63946;
+  --warning: #f4a261;
+  --success: #2fbf71;
+
+  color: var(--on-surface);
+  background: var(--background);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  min-height: 100vh;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--primary) 11%, transparent), transparent 30%),
+    linear-gradient(180deg, var(--background) 0%, var(--surface-low) 100%);
+}::-webkit-scrollbar{
+  display: none;
+}
+
+
+body.dark {
+  --background: #121417;
+  --surface: #1b1f24;
+  --surface-lowest: #232930;
+  --surface-low: #20262d;
+  --surface-high: #2b3138;
+  --on-surface: #f1f3f5;
+  --on-surface-variant: #c2c8cf;
+  --border: #3a424b;
+  --outline-variant: #59636e;
+  --primary: #ff7946;
+  --primary-container: #ff996f;
+  --secondary: #dde3ea;
+  --success: #4dd38a;
+  --warning: #f7b267;
+  --error: #ff6673;
+
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--primary) 18%, transparent), transparent 28%),
+    linear-gradient(180deg, #13171b 0%, var(--background) 48%, #171b20 100%);
+  color: var(--on-surface);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--primary-container) 35%, transparent);
+}
+
+.glass {
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.dark .glass {
+  background: color-mix(in srgb, var(--surface-low) 92%, transparent);
+}
