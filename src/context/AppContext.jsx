@@ -47,6 +47,7 @@ import {
   buildInitialBookingFinanceFields,
 } from '../utils/bookingFinance'
 import { getStoredBookingTotalDeduction } from '../utils/bookingStoredAmounts'
+import { computeFinanceBreakdown } from '../utils/bookingFinance'
 import { isBookingCompleted, parseSkillsInput } from '../utils/helpers'
 import { ASSIGNABLE_ROLES, ROLES } from '../utils/rbac'
 import { markSoundPlayed, wasSoundPlayed } from '../utils/soundDedupe'
@@ -54,8 +55,11 @@ import { isTechnicianAssignable } from '../utils/technicianVerification'
 
 function technicianMatchesServiceCategory(technician, service) {
   if (!service?.categoryId) return true
-  const cid = String(technician?.categoryId ?? '').trim()
-  return Boolean(cid) && cid === service.categoryId
+  const target = String(service.categoryId).trim()
+  const single = String(technician?.categoryId ?? '').trim()
+  if (single && single === target) return true
+  const arr = Array.isArray(technician?.categoryIds) ? technician.categoryIds : []
+  return arr.some((id) => String(id).trim() === target)
 }
 
 function technicianWithinBookingRadius(technician, bookingLatLng, platformKm) {
@@ -278,6 +282,8 @@ export function AppProvider({ children }) {
             addonFeePercent: docRow.addonFeePercent,
             globalUpiId: docRow.globalUpiId,
             globalPaymentQr: docRow.globalPaymentQr,
+            googleReviewUrl: docRow.googleReviewUrl,
+            homeReviews: Array.isArray(docRow.homeReviews) ? docRow.homeReviews : [],
             updatedAt: docRow.updatedAt,
           })
         }
@@ -398,6 +404,11 @@ export function AppProvider({ children }) {
       const defaultRadius = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
       const fallbackRadius =
         Number.isFinite(defaultRadius) && defaultRadius > 0 ? defaultRadius : 10
+      const categoryIds = Array.isArray(technician.categoryIds)
+        ? technician.categoryIds.map((id) => String(id).trim()).filter(Boolean)
+        : technician.categoryId
+          ? [String(technician.categoryId).trim()].filter(Boolean)
+          : []
       const payload = {
         name: technician.name,
         phone: technician.phone,
@@ -406,7 +417,8 @@ export function AppProvider({ children }) {
         pendingBookings: Number(technician.pendingBookings || 0),
         shiftStatus: technician.status || 'Available',
         skills: parseSkillsInput(technician.skills),
-        categoryId: String(technician.categoryId || '').trim(),
+        categoryIds,
+        categoryId: categoryIds[0] || String(technician.categoryId || '').trim(),
         areaAddress: technician.areaAddress || '',
         serviceRadius: Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : fallbackRadius,
         ...(tLat != null ? { latitude: tLat } : {}),
@@ -1000,6 +1012,16 @@ export function AppProvider({ children }) {
     toast.success('Service deleted.')
   }
 
+  const normalizeAdditionalServiceType = (raw) => {
+    const t = String(raw || '').trim().toLowerCase()
+    return t === 'secondary' ? 'Secondary' : 'Main'
+  }
+
+  const normalizeAdditionalServiceStatus = (raw) => {
+    const s = String(raw || '').trim().toLowerCase()
+    return s === 'inactive' ? 'Inactive' : 'Active'
+  }
+
   const upsertAdditionalService = async (item, options = {}) => {
     const title = String(item.title || '').trim()
     if (!title) throw new Error('Title is required.')
@@ -1007,15 +1029,74 @@ export function AppProvider({ children }) {
     if (!categoryId) throw new Error('Category is required.')
     const price = Number(item.price)
     if (!Number.isFinite(price) || price < 0) throw new Error('Price must be a non-negative number.')
+    const type = normalizeAdditionalServiceType(item.type)
+    if (!type) throw new Error('Type is required (Main or Secondary).')
+    const status = normalizeAdditionalServiceStatus(item.status)
 
     let savedId = String(item.id || '').trim()
     await withMutating('additionalService', async () => {
-      const payload = { title, price, categoryId }
+      const payload = { title, price, categoryId, type, status }
       if (savedId) await upsertDoc('additionalServices', savedId, payload)
       else savedId = await createDoc('additionalServices', payload)
     })
     toast.success(options.successToast ?? `“${title}” saved.`)
     return savedId
+  }
+
+  const upsertComingSoonService = async (item, options = {}) => {
+    const name = String(item.name || '').trim()
+    if (!name) throw new Error('Service name is required.')
+    const imageUrl = String(item.imageUrl || item.homeImage || '').trim()
+    if (!imageUrl) throw new Error('Service image is required.')
+    const previewStatus = normalizeAdditionalServiceStatus(item.previewStatus ?? item.status)
+
+    let savedId = String(item.id || '').trim()
+    await withMutating('comingSoonService', async () => {
+      const payload = {
+        name,
+        imageUrl,
+        homeImage: imageUrl,
+        listImage: imageUrl,
+        detailImage: imageUrl,
+        status: 'Coming Soon',
+        previewStatus,
+        price: 0,
+        visitingCharge: 0,
+        duration: 60,
+        categoryId: '',
+        hasVariations: false,
+        variations: [],
+        description: String(item.description || '').trim(),
+      }
+      if (savedId) await upsertDoc('services', savedId, payload)
+      else savedId = await createDoc('services', payload)
+    })
+    toast.success(options.successToast ?? `“${name}” saved.`)
+    return savedId
+  }
+
+  const convertComingSoonToActive = async (serviceId) => {
+    const id = String(serviceId || '').trim()
+    if (!id) throw new Error('Invalid service id.')
+    const row = data.services.find((s) => s.id === id)
+    if (!row) throw new Error('Service not found.')
+    if (String(row.status || '') !== 'Coming Soon') {
+      throw new Error('Only Coming Soon services can be converted.')
+    }
+    await withMutating('comingSoonConvert', async () => {
+      await upsertDoc('services', id, {
+        status: 'Inactive',
+        previewStatus: 'Inactive',
+      })
+    })
+    toast.success('Moved to Services (Inactive). Complete pricing and set Active when ready.')
+  }
+
+  const deleteComingSoonService = async (serviceId) => {
+    const id = String(serviceId || '').trim()
+    if (!id) throw new Error('Invalid service id.')
+    await withMutating('comingSoonDelete', async () => removeDoc('services', id))
+    toast.success('Coming soon service removed.')
   }
 
   const deleteAdditionalService = async (id) => {
@@ -1359,6 +1440,8 @@ export function AppProvider({ children }) {
     defaultTechnicianServiceRadiusKm,
     platformCommissionPercent,
     addonFeePercent,
+    googleReviewUrl,
+    homeReviews,
   }) => {
     if (session?.role !== ROLES.SUPER_ADMIN) {
       throw new Error('Only Super Admins can update platform settings.')
@@ -1377,11 +1460,28 @@ export function AppProvider({ children }) {
       throw new Error('Add-on fee percent must be between 0 and 100.')
     }
     await withMutating('platformSettings', async () => {
-      await upsertDoc('settings', 'general', {
+      const payload = {
         defaultTechnicianServiceRadiusKm: r,
         platformCommissionPercent: c,
         addonFeePercent: a,
-      })
+      }
+      if (googleReviewUrl != null) {
+        payload.googleReviewUrl = String(googleReviewUrl).trim()
+      }
+      if (homeReviews != null) {
+        payload.homeReviews = Array.isArray(homeReviews)
+          ? homeReviews
+              .map((r) => ({
+                name: String(r?.name || '').trim(),
+                text: String(r?.text || r?.review || '').trim(),
+                rating: Math.min(5, Math.max(1, Number(r?.rating) || 5)),
+                area: String(r?.area || '').trim(),
+                reviewDate: String(r?.reviewDate || r?.date || '').trim(),
+              }))
+              .filter((r) => r.name && r.text)
+          : []
+      }
+      await upsertDoc('settings', 'general', payload)
     })
     toast.success('Platform settings saved.')
   }
@@ -1488,10 +1588,28 @@ export function AppProvider({ children }) {
       (total, booking) => total + getStoredBookingTotalDeduction(booking),
       0,
     )
+    const cancelled = data.bookings.filter((b) => String(b.status).toLowerCase() === 'cancelled')
+    let technicianEarnings = 0
+    let companyEarnings = 0
+    let visitingCharges = 0
+    let platformFees = 0
+    completed.forEach((b) => {
+      const fin = computeFinanceBreakdown(b)
+      technicianEarnings += fin.technicianFinalEarning
+      companyEarnings += fin.companyEarnings
+      visitingCharges += fin.visitingCharge
+      platformFees += fin.platformFeeAmount
+    })
     return {
       totalOrdersCompleted: completed.length,
+      totalBookings: data.bookings.length,
+      cancelledBookings: cancelled.length,
       pendingBookings: pending.length,
       platformEarnings,
+      technicianEarnings,
+      companyEarnings,
+      visitingCharges,
+      platformFees,
       todaysBookings: todayBookings.length,
     }
   }, [data.bookings])
@@ -1541,6 +1659,9 @@ export function AppProvider({ children }) {
     importAdditionalServicesFromCsv,
     upsertAdditionalService,
     deleteAdditionalService,
+    upsertComingSoonService,
+    convertComingSoonToActive,
+    deleteComingSoonService,
     createAdminUser,
     updateAdminUser,
   }

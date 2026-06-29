@@ -47,9 +47,14 @@ export function DashboardPage() {
   }, [bookings])
 
   const cards = [
-    { label: 'Total Orders Completed', value: compactNumber(metrics.totalOrdersCompleted) },
-    { label: 'Pending Bookings', value: compactNumber(metrics.pendingBookings) },
-    { label: 'Platform Earnings', value: currency(metrics.platformEarnings) },
+    { label: 'Total Bookings', value: compactNumber(metrics.totalBookings) },
+    { label: 'Completed', value: compactNumber(metrics.totalOrdersCompleted) },
+    { label: 'Cancelled', value: compactNumber(metrics.cancelledBookings) },
+    { label: 'Pending', value: compactNumber(metrics.pendingBookings) },
+    { label: 'Technician Earnings', value: currency(metrics.technicianEarnings) },
+    { label: 'Company Earnings', value: currency(metrics.companyEarnings) },
+    { label: 'Visiting Charges', value: currency(metrics.visitingCharges) },
+    { label: 'Platform Fees', value: currency(metrics.platformFees) },
     { label: "Today's Bookings", value: compactNumber(metrics.todaysBookings) },
   ]
 
@@ -68,7 +73,7 @@ export function DashboardPage() {
         description={`Track service health across ${customers.length} customers and field operations in realtime.`}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {cards.map((card) => (
           <Card key={card.label}>
             <p className="text-sm text-slate-500 dark:text-slate-400">{card.label}</p>

@@ -7,6 +7,7 @@ import { useApp } from './context/useApp'
 import { AdminUsersPage } from './pages/AdminUsersPage'
 import { AdditionalServicesPage } from './pages/AdditionalServicesPage'
 import { BookingsPage } from './pages/BookingsPage'
+import { ComingSoonServicesPage } from './pages/ComingSoonServicesPage'
 import { CustomersPage } from './pages/CustomersPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ImportServicesPage } from './pages/ImportServicesPage'
@@ -94,6 +95,14 @@ function App() {
           element={
             <ProtectedRoute>
               <ServicesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/coming-soon-services"
+          element={
+            <ProtectedRoute>
+              <ComingSoonServicesPage />
             </ProtectedRoute>
           }
         />

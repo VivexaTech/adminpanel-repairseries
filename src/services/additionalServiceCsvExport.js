@@ -1,7 +1,7 @@
 import Papa from 'papaparse'
 import { downloadCsv } from '../utils/helpers'
 
-export const ADDITIONAL_SERVICE_CSV_COLUMNS = ['id', 'title', 'price', 'categoryId']
+export const ADDITIONAL_SERVICE_CSV_COLUMNS = ['id', 'title', 'price', 'categoryId', 'type', 'status']
 
 /**
  * @param {object} row — doc with id, title, price, categoryId
@@ -13,6 +13,8 @@ export function additionalServiceToCsvRow(row) {
     title: String(row?.title ?? '').trim(),
     price: Number.isFinite(price) ? String(price) : '0',
     categoryId: String(row?.categoryId ?? '').trim(),
+    type: String(row?.type || 'Main') === 'Secondary' ? 'Secondary' : 'Main',
+    status: String(row?.status || 'Active') === 'Inactive' ? 'Inactive' : 'Active',
   }
 }
 

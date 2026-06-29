@@ -2,7 +2,7 @@
 
 import { normalizeCsvHeader, parseFirestoreTimestamp, resolveCategoryId } from './serviceCsvImport'
 
-export const ADDITIONAL_SERVICE_CSV_FIELDS = ['id', 'title', 'price', 'categoryId', 'category', 'createdAt', 'updatedAt']
+export const ADDITIONAL_SERVICE_CSV_FIELDS = ['id', 'title', 'price', 'categoryId', 'category', 'type', 'status', 'createdAt', 'updatedAt']
 
 const ALLOWED = new Set(ADDITIONAL_SERVICE_CSV_FIELDS)
 
@@ -53,6 +53,8 @@ export function parseAdditionalServiceCsvRow(row, categories) {
     title,
     price,
     categoryId,
+    type: String(r.type ?? '').trim().toLowerCase() === 'secondary' ? 'Secondary' : 'Main',
+    status: String(r.status ?? '').trim().toLowerCase() === 'inactive' ? 'Inactive' : 'Active',
   }
 
   const createdAt = parseFirestoreTimestamp(r.createdAt)

@@ -37,7 +37,7 @@ export function canAccessPath(role, pathname) {
   if (role === ROLES.TECHNICIAN_MANAGER) return normalized === '/technicians'
   if (role === ROLES.BOOKING_MANAGER) return normalized === '/bookings'
   if (role === ROLES.SERVICE_MANAGER) {
-    return ['/services', '/additional-services', '/import-services', '/offers', '/coupons'].includes(normalized)
+    return ['/services', '/coming-soon-services', '/additional-services', '/import-services', '/offers', '/coupons'].includes(normalized)
   }
   if (role === 'supportManager') {
     return ['/bookings', '/customers'].includes(normalized)

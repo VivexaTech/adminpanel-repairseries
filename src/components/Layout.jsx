@@ -22,6 +22,7 @@ const navItems = [
   { to: '/technicians', label: 'Technicians', icon: Wrench },
   { to: '/bookings', label: 'Bookings', icon: Bell },
   { to: '/services', label: 'Services', icon: Settings },
+  { to: '/coming-soon-services', label: 'Coming Soon', icon: Settings },
   { to: '/additional-services', label: 'Additional Services', icon: PackagePlus },
   { to: '/import-services', label: 'Import Services', icon: Upload },
   { to: '/platform-settings', label: 'Platform Settings', icon: SlidersHorizontal },
@@ -39,6 +40,7 @@ export function AdminLayout({ children }) {
     const slug = location.pathname.replace(/^\//, '').replace(/\/$/, '')
     const map = {
       services: 'Services',
+      'coming-soon-services': 'Coming Soon Services',
       'additional-services': 'Additional Services',
       'import-services': 'Import Services',
       'platform-settings': 'Platform Settings',

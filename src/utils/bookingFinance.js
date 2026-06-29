@@ -45,21 +45,31 @@ export const sumApprovedAddOnPrices = (booking) => {
   return s
 }
 
-/**
- * Frozen original booking total (service + visiting) before add-ons.
- * @param {object} booking
- */
-export const getFrozenOriginalBookingAmount = (booking) => {
+/** Service price only — platform fee base (excludes visiting charge). */
+export const getServicePriceAmount = (booking) => {
   if (!booking || typeof booking !== 'object') return 0
-  const snap = safeMoney(booking.originalBookingAmount)
+  const snap = safeMoney(booking.servicePrice)
   if (snap > 0) return snap
-  const line = safeMoney(booking.amount ?? booking.baseAmount ?? booking.servicePrice ?? booking.price)
-  const visiting = safeMoney(booking.visitingCharge)
-  const combined = line + visiting
-  if (combined > 0) return combined
-  const total = safeMoney(booking.totalAmount ?? booking.finalAmount)
-  return total > 0 ? total : 0
+  const orig = safeMoney(booking.originalBookingAmount)
+  if (orig > 0) return orig
+  return safeMoney(booking.amount ?? booking.baseAmount ?? booking.servicePrice ?? booking.price)
 }
+
+/** Customer base total (service + visiting) before add-ons. */
+export const getCustomerBaseTotal = (booking) => {
+  if (!booking || typeof booking !== 'object') return 0
+  const snap = safeMoney(booking.customerBaseTotal)
+  if (snap > 0) return snap
+  const svc = getServicePriceAmount(booking)
+  const visiting = safeMoney(booking.visitingCharge)
+  return svc + visiting
+}
+
+/**
+ * @deprecated Use getServicePriceAmount for platform fee base.
+ * Frozen original booking total (service + visiting) before add-ons.
+ */
+export const getFrozenOriginalBookingAmount = (booking) => getCustomerBaseTotal(booking)
 
 /**
  * Percentages stored on the booking at creation time (never use live settings for math).
@@ -88,16 +98,23 @@ export const getBookingFeePercents = (booking) => {
  */
 export const computeFinanceBreakdown = (booking) => {
   const { platformFeePercent, addonFeePercent } = getBookingFeePercents(booking)
-  const originalBookingAmount = getFrozenOriginalBookingAmount(booking)
+  const servicePrice = getServicePriceAmount(booking)
+  const visitingCharge = safeMoney(booking.visitingCharge)
+  const customerBaseTotal = servicePrice + visitingCharge
   const addedServicesAmount = sumApprovedAddOnPrices(booking)
-  const finalBookingAmount = originalBookingAmount + addedServicesAmount
-  const platformFeeAmount = Math.round(originalBookingAmount * (platformFeePercent / 100))
+  const finalBookingAmount = customerBaseTotal + addedServicesAmount
+  const platformFeeAmount = Math.round(servicePrice * (platformFeePercent / 100))
   const addonFeeAmount = Math.round(addedServicesAmount * (addonFeePercent / 100))
-  const totalDeduction = platformFeeAmount + addonFeeAmount
-  const technicianFinalEarning = finalBookingAmount - totalDeduction
+  const technicianFinalEarning =
+    servicePrice - platformFeeAmount + addedServicesAmount - addonFeeAmount
+  const companyEarnings = platformFeeAmount + visitingCharge + addonFeeAmount
+  const totalDeduction = finalBookingAmount - technicianFinalEarning
 
   return {
-    originalBookingAmount,
+    servicePrice,
+    visitingCharge,
+    originalBookingAmount: servicePrice,
+    customerBaseTotal,
     addedServicesAmount,
     finalBookingAmount,
     platformFeePercent,
@@ -106,6 +123,7 @@ export const computeFinanceBreakdown = (booking) => {
     addonFeeAmount,
     totalDeduction,
     technicianFinalEarning,
+    companyEarnings,
   }
 }
 
@@ -116,17 +134,22 @@ export const computeFinanceBreakdown = (booking) => {
 export const buildFinanceWritePatch = (booking) => {
   const b = computeFinanceBreakdown(booking)
   return {
+    servicePrice: b.servicePrice,
+    visitingCharge: b.visitingCharge,
     originalBookingAmount: b.originalBookingAmount,
+    customerBaseTotal: b.customerBaseTotal,
     addedServicesAmount: b.addedServicesAmount,
     finalBookingAmount: b.finalBookingAmount,
     platformFeeAmount: b.platformFeeAmount,
     addonFeeAmount: b.addonFeeAmount,
     totalDeduction: b.totalDeduction,
     technicianFinalEarning: b.technicianFinalEarning,
+    companyEarnings: b.companyEarnings,
     totalAmount: b.finalBookingAmount,
     finalAmount: b.finalBookingAmount,
     technicianEarning: b.technicianFinalEarning,
-    platformCommission: b.platformFeeAmount + b.addonFeeAmount,
+    platformCommission: b.platformFeeAmount,
+    platformFinalEarning: b.companyEarnings,
   }
 }
 
@@ -138,30 +161,38 @@ export const buildFinanceWritePatch = (booking) => {
  * @param {number} visitingCharge
  */
 export const buildInitialBookingFinanceFields = (platformFeePercent, addonFeePercent, servicePrice, visitingCharge) => {
-  const originalBookingAmount = safeMoney(servicePrice) + safeMoney(visitingCharge)
+  const svc = safeMoney(servicePrice)
+  const visit = safeMoney(visitingCharge)
   const p = clampPct(platformFeePercent, 30)
   const a = clampPct(addonFeePercent, DEFAULT_ADDON_FEE_PERCENT)
-  const platformFeeAmount = Math.round(originalBookingAmount * (p / 100))
+  const customerBaseTotal = svc + visit
+  const platformFeeAmount = Math.round(svc * (p / 100))
   const addonFeeAmount = 0
   const addedServicesAmount = 0
-  const finalBookingAmount = originalBookingAmount
-  const totalDeduction = platformFeeAmount
-  const technicianFinalEarning = finalBookingAmount - totalDeduction
+  const finalBookingAmount = customerBaseTotal
+  const technicianFinalEarning = svc - platformFeeAmount
+  const companyEarnings = platformFeeAmount + visit
+  const totalDeduction = finalBookingAmount - technicianFinalEarning
 
   return {
     platformFeePercent: p,
     addonFeePercent: a,
-    originalBookingAmount,
+    servicePrice: svc,
+    visitingCharge: visit,
+    originalBookingAmount: svc,
+    customerBaseTotal,
     addedServicesAmount,
     finalBookingAmount,
     platformFeeAmount,
     addonFeeAmount,
     totalDeduction,
     technicianFinalEarning,
+    companyEarnings,
     totalAmount: finalBookingAmount,
     finalAmount: finalBookingAmount,
     technicianEarning: technicianFinalEarning,
     platformCommission: platformFeeAmount,
+    platformFinalEarning: companyEarnings,
   }
 }
 
@@ -173,12 +204,15 @@ export const getBookingEarningSplit = (booking) => {
   const b = computeFinanceBreakdown(booking)
   return {
     totalAmount: b.finalBookingAmount,
-    platformCut: b.platformFeeAmount + b.addonFeeAmount,
+    platformCut: b.companyEarnings,
+    companyEarnings: b.companyEarnings,
     technicianEarning: b.technicianFinalEarning,
     platformCommissionPercent: b.platformFeePercent,
     addonFeePercent: b.addonFeePercent,
     platformFeeAmount: b.platformFeeAmount,
     addonFeeAmount: b.addonFeeAmount,
+    visitingCharge: b.visitingCharge,
+    servicePrice: b.servicePrice,
   }
 }
 

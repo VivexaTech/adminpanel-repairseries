@@ -331,8 +331,32 @@ export function TechnicianVerificationDrawer({
 
             <section className="mt-5 rounded-2xl border border-[var(--outline-variant)]/60 bg-[var(--surface-low)]/35 p-4 shadow-inner">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--on-surface-variant)]">
-                Aadhaar verification
+                Identity documents (KYC)
               </h3>
+              <div className="mt-3 space-y-0">
+                <Row
+                  label="Aadhaar number"
+                  value={technician?.kyc?.aadhaarNumber || '—'}
+                  masked={
+                    technician?.kyc?.aadhaarNumber
+                      ? `XXXX XXXX ${String(technician.kyc.aadhaarNumber).slice(-4)}`
+                      : '—'
+                  }
+                  reveal={revealSensitive}
+                  mono
+                />
+                <Row
+                  label="PAN number"
+                  value={technician?.kyc?.panNumber || '—'}
+                  masked={
+                    technician?.kyc?.panNumber
+                      ? `${String(technician.kyc.panNumber).slice(0, 2)}XXXXX${String(technician.kyc.panNumber).slice(-1)}`
+                      : '—'
+                  }
+                  reveal={revealSensitive}
+                  mono
+                />
+              </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <KycImageCard
                   title="Aadhaar front"

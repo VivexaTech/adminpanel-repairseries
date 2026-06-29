@@ -18,7 +18,7 @@ import { parseAdditionalServiceCsvRow, normalizeCsvHeader } from '../services/ad
 import { exportAdditionalServicesCsv } from '../services/additionalServiceCsvExport'
 import { currency } from '../utils/helpers'
 
-const emptyForm = () => ({ id: '', title: '', price: '', categoryId: '' })
+const emptyForm = () => ({ id: '', title: '', price: '', categoryId: '', type: 'Main', status: 'Active' })
 
 function validateCsvHeaders(headers) {
   const missing = ['title', 'price'].filter((h) => !headers.includes(h))
@@ -112,6 +112,8 @@ export function AdditionalServicesPage() {
       title: row.title ?? '',
       price: String(row.price ?? ''),
       categoryId: row.categoryId ?? '',
+      type: String(row.type || 'Main') === 'Secondary' ? 'Secondary' : 'Main',
+      status: String(row.status || 'Active') === 'Inactive' ? 'Inactive' : 'Active',
     })
     setModalOpen(true)
   }
@@ -124,6 +126,8 @@ export function AdditionalServicesPage() {
           title: form.title,
           price: form.price,
           categoryId: form.categoryId,
+          type: form.type,
+          status: form.status,
         },
         { successToast: form.id ? 'Saved.' : 'Created.' },
       )
@@ -366,6 +370,8 @@ export function AdditionalServicesPage() {
                 <tr>
                   <th className="px-4 py-3 font-medium">Title</th>
                   <th className="px-4 py-3 font-medium">Category</th>
+                  <th className="px-4 py-3 font-medium">Type</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium">Price</th>
                   <th className="px-4 py-3 font-medium text-right">Actions</th>
                 </tr>
@@ -375,6 +381,16 @@ export function AdditionalServicesPage() {
                   <tr key={row.id} className="border-t border-[var(--outline-variant)]/45">
                     <td className="px-4 py-3 font-medium text-[var(--on-surface)]">{row.title}</td>
                     <td className="px-4 py-3">{categoryMap[row.categoryId] || row.categoryId || '—'}</td>
+                    <td className="px-4 py-3">
+                      <Badge tone={String(row.type) === 'Secondary' ? 'info' : 'neutral'}>
+                        {String(row.type || 'Main') === 'Secondary' ? 'Secondary' : 'Main'}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge tone={String(row.status) === 'Inactive' ? 'warning' : 'success'}>
+                        {String(row.status || 'Active') === 'Inactive' ? 'Inactive' : 'Active'}
+                      </Badge>
+                    </td>
                     <td className="px-4 py-3">{currency(row.price)}</td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">
@@ -402,7 +418,7 @@ export function AdditionalServicesPage() {
                 ))}
                 {!filtered.length ? (
                   <tr>
-                    <td colSpan={4} className="px-4 py-8 text-center text-[var(--on-surface-variant)]">
+                    <td colSpan={6} className="px-4 py-8 text-center text-[var(--on-surface-variant)]">
                       No additional services yet. Add one or import CSV.
                     </td>
                   </tr>
@@ -449,6 +465,18 @@ export function AdditionalServicesPage() {
                   {c.name}
                 </option>
               ))}
+            </Select>
+          </Field>
+          <Field label="Type of additional service">
+            <Select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}>
+              <option value="Main">Main</option>
+              <option value="Secondary">Secondary</option>
+            </Select>
+          </Field>
+          <Field label="Status">
+            <Select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}>
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
             </Select>
           </Field>
           <div className="flex justify-end gap-2 pt-2">

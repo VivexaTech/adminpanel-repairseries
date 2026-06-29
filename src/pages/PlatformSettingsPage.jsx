@@ -30,6 +30,7 @@ export function PlatformSettingsPage() {
   const [addonCommission, setAddonCommission] = useState('')
   const [globalUpiInput, setGlobalUpiInput] = useState('')
   const [qrImageUrl, setQrImageUrl] = useState('')
+  const [googleReviewInput, setGoogleReviewInput] = useState('')
   const qrFileRef = useRef(null)
 
   useEffect(() => {
@@ -49,6 +50,11 @@ export function PlatformSettingsPage() {
         ? String(platformSettings.globalPaymentQr)
         : '',
     )
+    setGoogleReviewInput(
+      platformSettings?.googleReviewUrl != null && platformSettings?.googleReviewUrl !== ''
+        ? String(platformSettings.googleReviewUrl)
+        : '',
+    )
   }, [
     platformSettings?.updatedAt,
     platformSettings?.defaultTechnicianServiceRadiusKm,
@@ -56,6 +62,7 @@ export function PlatformSettingsPage() {
     platformSettings?.addonFeePercent,
     platformSettings?.globalUpiId,
     platformSettings?.globalPaymentQr,
+    platformSettings?.googleReviewUrl,
   ])
 
   const onSubmit = async (e) => {
@@ -80,6 +87,7 @@ export function PlatformSettingsPage() {
         defaultTechnicianServiceRadiusKm: r,
         platformCommissionPercent: c,
         addonFeePercent: a,
+        googleReviewUrl: googleReviewInput,
       })
     } catch (err) {
       toast.error(err?.message || 'Could not save settings.')
@@ -211,6 +219,18 @@ export function PlatformSettingsPage() {
               Separate rate for extra / additional services after customer approval.
             </span>
           </Field>
+          <Field label="Google Review URL">
+            <Input
+              type="url"
+              value={googleReviewInput}
+              onChange={(e) => setGoogleReviewInput(e.target.value)}
+              placeholder="https://g.page/r/.../review"
+              disabled={busy || settingsLoading}
+            />
+            <span className="text-xs font-normal text-[var(--on-surface-variant)]">
+              Google Business listing review link — shown to customers after booking completion.
+            </span>
+          </Field>
           <Button type="submit" disabled={busy || settingsLoading} className="w-full sm:w-auto">
             {busy ? 'Saving…' : 'Save changes'}
           </Button>
@@ -237,7 +257,7 @@ export function PlatformSettingsPage() {
               autoComplete="off"
             />
             <span className="text-xs font-normal text-[var(--on-surface-variant)]">
-              Saved as lowercase (e.g. Vivek@Paytm → vivek@paytm).
+              Saved as lowercase (e.g. name@paytm → name@paytm).
             </span>
           </Field>
           <div>

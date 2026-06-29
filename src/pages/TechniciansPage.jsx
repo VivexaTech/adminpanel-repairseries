@@ -95,6 +95,7 @@ export function TechniciansPage() {
     pendingBookings: 0,
     status: 'Available',
     categoryId: '',
+    categoryIds: [],
     skills: '',
     areaAddress: '',
     latitude: '',
@@ -117,6 +118,7 @@ export function TechniciansPage() {
     pendingBookings: 0,
     status: 'Available',
     categoryId: '',
+    categoryIds: [],
     skills: '',
     areaAddress: '',
     latitude: '',
@@ -172,15 +174,21 @@ export function TechniciansPage() {
 
   const submit = (event) => {
     event.preventDefault()
-    if (!String(form.categoryId || '').trim()) {
-      toast.error('Select a technician category.')
+    const categoryIds = Array.isArray(form.categoryIds)
+      ? form.categoryIds.map((id) => String(id).trim()).filter(Boolean)
+      : form.categoryId
+        ? [String(form.categoryId).trim()]
+        : []
+    if (!categoryIds.length) {
+      toast.error('Select at least one technician category.')
       return
     }
     upsertTechnician({
       ...form,
       completedBookings: Number(form.completedBookings),
       pendingBookings: Number(form.pendingBookings),
-      categoryId: form.categoryId?.trim() || '',
+      categoryIds,
+      categoryId: categoryIds[0],
       areaAddress: form.areaAddress?.trim() || '',
       latitude: form.latitude === '' ? undefined : form.latitude,
       longitude: form.longitude === '' ? undefined : form.longitude,
@@ -197,6 +205,11 @@ export function TechniciansPage() {
       ...technician,
       status: normalizeShiftStatus(technician),
       categoryId: technician.categoryId ?? '',
+      categoryIds: Array.isArray(technician.categoryIds)
+        ? technician.categoryIds
+        : technician.categoryId
+          ? [technician.categoryId]
+          : [],
       areaAddress: technician.areaAddress ?? '',
       latitude:
         technician.latitude != null && technician.latitude !== '' ? String(technician.latitude) : '',
@@ -245,7 +258,11 @@ export function TechniciansPage() {
           <TechnicianCard
             key={technician.id}
             technician={technician}
-            categoryLabel={categoryMap[technician.categoryId] || '— Set in edit'}
+            categoryLabel={
+              (Array.isArray(technician.categoryIds) && technician.categoryIds.length
+                ? technician.categoryIds.map((id) => categoryMap[id] || id).join(', ')
+                : categoryMap[technician.categoryId]) || '— Set in edit'
+            }
             bookingStats={
               technicianStats[technician.id] || {
                 completed: 0,
@@ -283,19 +300,38 @@ export function TechniciansPage() {
           <Field label="Email">
             <Input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
           </Field>
-          <Field label="Category">
-            <Select
-              value={form.categoryId}
-              onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
-              required
-            >
-              <option value="">Select category (e.g. AC, Plumber)</option>
-              {categories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
-            </Select>
+          <Field label="Categories">
+            <div className="max-h-48 space-y-2 overflow-y-auto rounded-2xl border border-[var(--outline-variant)] p-3">
+              {categories.map((category) => {
+                const checked = (form.categoryIds || []).includes(category.id)
+                return (
+                  <label
+                    key={category.id}
+                    className="flex cursor-pointer items-center gap-2 text-sm"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        const prev = Array.isArray(form.categoryIds) ? [...form.categoryIds] : []
+                        const next = e.target.checked
+                          ? [...new Set([...prev, category.id])]
+                          : prev.filter((id) => id !== category.id)
+                        setForm({
+                          ...form,
+                          categoryIds: next,
+                          categoryId: next[0] || '',
+                        })
+                      }}
+                    />
+                    <span>{category.name}</span>
+                  </label>
+                )
+              })}
+            </div>
+            <span className="text-xs text-[var(--on-surface-variant)]">
+              Select all categories this technician can service (e.g. AC + Chimney).
+            </span>
           </Field>
           <Field label="Status">
             <Select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
