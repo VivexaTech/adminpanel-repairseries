@@ -1,4 +1,4 @@
-import { format } from 'date-fns'
+import { format, isValid } from 'date-fns'
 import clsx from 'clsx'
 import {
   buildFinanceWritePatch,
@@ -223,9 +223,21 @@ export const compactNumber = (value) =>
     maximumFractionDigits: 1,
   }).format(value || 0)
 
-export const formatDateTime = (value, pattern = 'dd MMM yyyy, hh:mm a') => {
+export const formatDateTime = (
+  value,
+  pattern = 'dd MMM yyyy, hh:mm a'
+) => {
   if (!value) return '--'
-  return format(new Date(value), pattern)
+
+  // Firestore Timestamp support
+  const date = value?.toDate ? value.toDate() : new Date(value)
+
+  if (!isValid(date)) {
+    console.warn('Invalid date:', value)
+    return '--'
+  }
+
+  return format(date, pattern)
 }
 
 export const downloadCsv = (filename, csvText) => {
