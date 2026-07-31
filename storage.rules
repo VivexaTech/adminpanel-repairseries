@@ -1,0 +1,28 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function authed() {
+      return request.auth != null;
+    }
+    function isActiveAdmin() {
+      return authed()
+        && firestore.get(/databases/(default)/documents/adminUsers/$(request.auth.uid)).data.status == 'active';
+    }
+
+    match /platform-settings/{allPaths=**} {
+      allow read: if true;
+      allow write: if isActiveAdmin();
+    }
+
+    match /invoices/{bookingId}/{fileName} {
+      allow read: if isActiveAdmin()
+        || (authed()
+          && firestore.get(/databases/(default)/documents/bookings/$(bookingId)).data.customerId == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

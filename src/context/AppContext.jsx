@@ -17,9 +17,17 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { toast } from 'sonner'
+import {
+  DEFAULT_PEAK_WINDOWS,
+  DEFAULT_RANKING_PENALTIES,
+  normalizeComingSoonCategory,
+} from '../constants/catalog'
+import { DEFAULT_REVISIT_POLICY, normalizeRevisitPolicy } from '../constants/revisitPolicy'
+import { normalizeScoreRewards } from '../constants/rankingScores'
 import { auth, db, isFirebaseConfigured, secondaryAuth } from '../firebase/config'
 import {
   createDoc,
+  fetchDoc,
   removeDoc,
   subscribeCollection,
   subscribeDoc,
@@ -27,6 +35,7 @@ import {
   updateDocFields,
   upsertDoc,
 } from '../services/firestore'
+import { normalizeSchedulingSettings } from '../services/schedulingSettings'
 import { parseAdditionalServiceCsvRow } from '../services/additionalServiceCsvImport'
 import { parseServiceCsvRow } from '../services/serviceCsvImport'
 import { enqueueBookingNotification } from '../services/bookingNotifications'
@@ -73,6 +82,23 @@ function technicianWithinBookingRadius(technician, bookingLatLng, platformKm) {
   return haversineDistanceKm(tLat, tLng, bLat, bLng) <= maxKm
 }
 
+function localDateKey(value) {
+  const date = value?.toDate?.() ? value.toDate() : value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate(),
+  ).padStart(2, '0')}`
+}
+
+function technicianDailyBookingCount(bookings, technicianId, dayKey, excludeBookingId = '') {
+  return (bookings || []).filter((row) => {
+    if (row.id === excludeBookingId) return false
+    if (String(row.technicianId || '') !== String(technicianId || '')) return false
+    if (['cancelled', 'completed'].includes(String(row.status || '').toLowerCase())) return false
+    return localDateKey(row.scheduledAt || row.dateTime) === dayKey
+  }).length
+}
+
 const ROLE_BINDINGS = {
   [ROLES.SUPER_ADMIN]: [
     { key: 'customers', collectionName: 'customers' },
@@ -83,8 +109,10 @@ const ROLE_BINDINGS = {
     { key: 'categories', collectionName: 'categories' },
     { key: 'faqs', collectionName: 'faqs' },
     { key: 'offers', collectionName: 'offers' },
+    { key: 'banners', collectionName: 'banners' },
     { key: 'coupons', collectionName: 'coupons' },
     { key: 'adminUsers', collectionName: 'adminUsers' },
+    { key: 'invoices', collectionName: 'invoices' },
   ],
   [ROLES.BOOKING_MANAGER]: [
     { key: 'bookings', collectionName: 'bookings' },
@@ -92,6 +120,7 @@ const ROLE_BINDINGS = {
     { key: 'technicians', collectionName: 'technicians' },
     { key: 'services', collectionName: 'services' },
     { key: 'categories', collectionName: 'categories' },
+    { key: 'invoices', collectionName: 'invoices' },
   ],
   [ROLES.TECHNICIAN_MANAGER]: [
     { key: 'technicians', collectionName: 'technicians' },
@@ -103,6 +132,7 @@ const ROLE_BINDINGS = {
     { key: 'additionalServices', collectionName: 'additionalServices' },
     { key: 'categories', collectionName: 'categories' },
     { key: 'offers', collectionName: 'offers' },
+    { key: 'banners', collectionName: 'banners' },
     { key: 'coupons', collectionName: 'coupons' },
     { key: 'faqs', collectionName: 'faqs' },
   ],
@@ -124,8 +154,10 @@ const EMPTY_DATA = {
   categories: [],
   faqs: [],
   offers: [],
+  banners: [],
   coupons: [],
   adminUsers: [],
+  invoices: [],
 }
 
 const IDLE_LOADING = {
@@ -137,9 +169,12 @@ const IDLE_LOADING = {
   categories: false,
   faqs: false,
   offers: false,
+  banners: false,
   coupons: false,
   adminUsers: false,
+  invoices: false,
   platformSettings: false,
+  rankingSettings: false,
 }
 
 const AppContext = createContext(null)
@@ -157,9 +192,12 @@ export function AppProvider({ children }) {
     categories: true,
     faqs: true,
     offers: true,
+    banners: true,
     coupons: true,
     adminUsers: true,
+    invoices: true,
     platformSettings: false,
+    rankingSettings: false,
   })
   const [mutating, setMutating] = useState({})
   const [data, setData] = useState({
@@ -171,10 +209,13 @@ export function AppProvider({ children }) {
     categories: [],
     faqs: [],
     offers: [],
+    banners: [],
     coupons: [],
     adminUsers: [],
+    invoices: [],
   })
   const [platformSettings, setPlatformSettings] = useState(null)
+  const [rankingSettings, setRankingSettings] = useState(null)
   const bookingsBootstrapped = useRef(false)
   const profileUnsubRef = useRef(null)
 
@@ -298,6 +339,28 @@ export function AppProvider({ children }) {
   }, [session?.id])
 
   useEffect(() => {
+    if (!isFirebaseConfigured || !db || !session?.id) {
+      setRankingSettings(null)
+      setLoading((current) => ({ ...current, rankingSettings: false }))
+      return undefined
+    }
+    setLoading((current) => ({ ...current, rankingSettings: true }))
+    const unsub = subscribeDoc(
+      'settings',
+      'ranking',
+      (row) => {
+        setRankingSettings(row || null)
+        setLoading((current) => ({ ...current, rankingSettings: false }))
+      },
+      () => {
+        setRankingSettings(null)
+        setLoading((current) => ({ ...current, rankingSettings: false }))
+      },
+    )
+    return () => unsub?.()
+  }, [session?.id])
+
+  useEffect(() => {
     if (!isFirebaseConfigured || !db) return undefined
 
     if (!session?.id || !session.role) {
@@ -322,7 +385,7 @@ export function AppProvider({ children }) {
       bindings.forEach(({ key }) => {
         nextLoading[key] = true
       })
-      return { ...nextLoading, platformSettings: current.platformSettings }
+      return { ...nextLoading, platformSettings: current.platformSettings, rankingSettings: current.rankingSettings }
     })
 
     const unsubscribers = bindings.map(({ key, collectionName }) =>
@@ -593,9 +656,25 @@ export function AppProvider({ children }) {
     if (!startDate || Number.isNaN(startDate.getTime())) throw new Error('Invalid booking schedule.')
 
     const duration = Number(booking.durationMinutes || 60)
-    const descriptors = getSlotDescriptorsForBookingWindow(startDate, duration)
+    const scheduling = normalizeSchedulingSettings(
+      (await fetchDoc('settings', 'scheduling')) || {},
+    )
+    const descriptors = getSlotDescriptorsForBookingWindow(
+      startDate,
+      duration + scheduling.travelBufferMinutes,
+    )
     if (!descriptors.length) {
       throw new Error('Booking time falls outside schedulable hourly slots (08:00–22:00 IST).')
+    }
+    if (
+      technicianDailyBookingCount(
+        data.bookings,
+        technicianId,
+        localDateKey(startDate),
+        bookingId,
+      ) >= scheduling.maximumDailyBookings
+    ) {
+      throw new Error('Technician has reached the configured daily booking limit.')
     }
     const bookingLatLng = getBookingLatLng(booking)
     const platformKmRaw = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
@@ -620,7 +699,16 @@ export function AppProvider({ children }) {
         throw new Error(v.message || 'Technician is not available for this time slot.')
       }
       try {
-        await updateDocFields('bookings', bookingId, { technicianId, status: 'Assigned' })
+        await updateDocFields('bookings', bookingId, {
+          technicianId,
+          status: 'Assigned',
+          travelBufferMinutes: scheduling.travelBufferMinutes,
+          reservedSlotIndices: descriptors.map((slot) => slot.slotIndex),
+          availabilityEndsAt: Timestamp.fromMillis(
+            startDate.getTime() +
+              (duration + scheduling.travelBufferMinutes) * 60_000,
+          ),
+        })
         await reserveBusySlotsForBooking(technicianId, bookingId, descriptors, 'booking')
       } catch (err) {
         await updateDocFields('bookings', bookingId, { technicianId: prevTechId || null, status: prevStatus })
@@ -788,7 +876,13 @@ export function AppProvider({ children }) {
       }
 
       const durationMinutes = Number(booking.durationMinutes || 60)
-      const descriptors = getSlotDescriptorsForBookingWindow(scheduledAtDate, durationMinutes)
+      const scheduling = normalizeSchedulingSettings(
+        (await fetchDoc('settings', 'scheduling')) || {},
+      )
+      const descriptors = getSlotDescriptorsForBookingWindow(
+        scheduledAtDate,
+        durationMinutes + scheduling.travelBufferMinutes,
+      )
       if (!descriptors.length) {
         throw new Error('Booking time falls outside schedulable hourly slots (08:00–22:00 IST).')
       }
@@ -831,6 +925,15 @@ export function AppProvider({ children }) {
         const sorted = [...candidates].sort((a, b) => String(a.id).localeCompare(String(b.id)))
         for (const tech of sorted) {
           if (!technicianWithinBookingRadius(tech, bookingLatLng, platformKmResolved)) continue
+          if (
+            technicianDailyBookingCount(
+              data.bookings,
+              tech.id,
+              localDateKey(scheduledAtDate),
+            ) >= scheduling.maximumDailyBookings
+          ) {
+            continue
+          }
           const v = await verifyBusySlotsFree(tech.id, descriptors, null)
           if (v.ok) return { technicianId: tech.id, assigned: true, status: 'Assigned' }
         }
@@ -850,6 +953,15 @@ export function AppProvider({ children }) {
         notes: booking.notes || '',
         scheduledAt: Timestamp.fromDate(scheduledAtDate),
         durationMinutes,
+        travelBufferMinutes: scheduling.travelBufferMinutes,
+        reservedSlotIndices: descriptors.map((slot) => slot.slotIndex),
+        serviceEndsAt: Timestamp.fromMillis(
+          scheduledAtDate.getTime() + durationMinutes * 60_000,
+        ),
+        availabilityEndsAt: Timestamp.fromMillis(
+          scheduledAtDate.getTime() +
+            (durationMinutes + scheduling.travelBufferMinutes) * 60_000,
+        ),
         amount: servicePrice,
         visitingCharge,
         addOnServices: [],
@@ -860,6 +972,7 @@ export function AppProvider({ children }) {
         ...(lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
           ? { latitude: lat, longitude: lng }
           : {}),
+        revisitPolicy: normalizeRevisitPolicy(service?.revisitPolicy || DEFAULT_REVISIT_POLICY),
       }
 
       newBookingId = await createDoc('bookings', payload)
@@ -996,6 +1109,7 @@ export function AppProvider({ children }) {
         brands,
         processSteps,
         status: service.status || 'Active',
+        revisitPolicy: normalizeRevisitPolicy(service.revisitPolicy || DEFAULT_REVISIT_POLICY),
       }
       if (!hasVariations && (!Number.isFinite(payload.price) || payload.price < 0)) {
         throw new Error('Invalid service price.')
@@ -1052,6 +1166,8 @@ export function AppProvider({ children }) {
 
     let savedId = String(item.id || '').trim()
     await withMutating('comingSoonService', async () => {
+      const comingSoonCategory = normalizeComingSoonCategory(item.comingSoonCategory)
+      const displayOrder = Number(item.displayOrder)
       const payload = {
         name,
         imageUrl,
@@ -1060,6 +1176,8 @@ export function AppProvider({ children }) {
         detailImage: imageUrl,
         status: 'Coming Soon',
         previewStatus,
+        comingSoonCategory,
+        displayOrder: Number.isFinite(displayOrder) ? displayOrder : 0,
         price: 0,
         visitingCharge: 0,
         duration: 60,
@@ -1207,7 +1325,9 @@ export function AppProvider({ children }) {
   }
 
   const upsertOffer = async (offer) => {
-    if (session?.role !== ROLES.SUPER_ADMIN) throw new Error('Only Super Admins can manage offers.')
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to manage offers.')
+    }
     const image = String(offer.image || '').trim()
     if (!image) throw new Error('Offer image is required.')
     const title = String(offer.title || '').trim()
@@ -1221,9 +1341,94 @@ export function AppProvider({ children }) {
   }
 
   const deleteOffer = async (offerId) => {
-    if (session?.role !== ROLES.SUPER_ADMIN) throw new Error('Only Super Admins can manage offers.')
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to manage offers.')
+    }
     await withMutating('offerDelete', async () => removeDoc('offers', offerId))
     toast.success('Offer removed.')
+  }
+
+
+  const upsertBanner = async (banner) => {
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to manage banners.')
+    }
+    const section = String(banner.section || '').trim()
+    if (!section) throw new Error('Section is required.')
+    const mobileImage = String(banner.mobileImage || '').trim()
+    const websiteImage = String(banner.websiteImage || '').trim()
+    const image = String(banner.image || mobileImage || websiteImage).trim()
+    if (!mobileImage && !websiteImage && !image) {
+      throw new Error('Upload at least a mobile or website image.')
+    }
+    const title = String(banner.title || '').trim()
+    const redirectLink = String(banner.redirectLink || '').trim()
+    const displayOrder = Number(banner.displayOrder)
+    const enabled = banner.enabled !== false && banner.active !== false
+    await withMutating('banner', async () => {
+      const payload = {
+        title,
+        section,
+        mobileImage: mobileImage || image,
+        websiteImage: websiteImage || image,
+        image: image || mobileImage || websiteImage,
+        redirectLink,
+        displayOrder: Number.isFinite(displayOrder) ? displayOrder : 0,
+        enabled,
+        active: enabled,
+      }
+      if (banner.id) await upsertDoc('banners', banner.id, payload)
+      else await createDoc('banners', payload)
+    })
+    toast.success('Banner saved.')
+  }
+
+  const deleteBanner = async (bannerId) => {
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to manage banners.')
+    }
+    await withMutating('bannerDelete', async () => removeDoc('banners', bannerId))
+    toast.success('Banner removed.')
+  }
+
+  const updateRankingSettings = async (patch) => {
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.TECHNICIAN_MANAGER) {
+      throw new Error('Only Super Admins or Technician Managers can update peak hour settings.')
+    }
+    if (!isFirebaseConfigured || !db) throw new Error('Firebase is not configured.')
+    const peakWindows = Array.isArray(patch.peakWindows)
+      ? patch.peakWindows.map((w, i) => ({
+          startHour: Number(w.startHour),
+          endHour: Number(w.endHour),
+          label: String(w.label || `Peak ${i + 1}`).trim() || `Peak ${i + 1}`,
+        }))
+      : DEFAULT_PEAK_WINDOWS
+    const penalties = {
+      normalLeave: Number(patch?.penalties?.normalLeave ?? DEFAULT_RANKING_PENALTIES.normalLeave),
+      peakHourLeave: Number(patch?.penalties?.peakHourLeave ?? DEFAULT_RANKING_PENALTIES.peakHourLeave),
+      emergencyLeaveRequiresApproval:
+        patch?.penalties?.emergencyLeaveRequiresApproval ??
+        DEFAULT_RANKING_PENALTIES.emergencyLeaveRequiresApproval,
+    }
+    const scoreRewards = normalizeScoreRewards({
+      ...(rankingSettings?.scoreRewards || {}),
+      ...(patch?.scoreRewards || {}),
+    })
+    await withMutating('rankingSettings', async () => {
+      await upsertDoc('settings', 'ranking', {
+        peakWindows,
+        penalties,
+        scoreRewards,
+        silverThreshold: Number(patch.silverThreshold ?? 401),
+        goldThreshold: Number(patch.goldThreshold ?? 781),
+        blockOfflineDuringPeak: patch.blockOfflineDuringPeak !== false,
+        peakHourSlotStart: Number(patch.peakHourSlotStart ?? 1),
+        peakHourSlotEnd: Number(patch.peakHourSlotEnd ?? 3),
+        peakHoursTarget: Number(patch.peakHoursTarget ?? 4),
+        weekendHoursTarget: Number(patch.weekendHoursTarget ?? 8),
+      })
+    })
+    toast.success('Peak hour & scoring settings saved.')
   }
 
   const upsertCoupon = async (coupon) => {
@@ -1651,6 +1856,10 @@ export function AppProvider({ children }) {
     deleteFaq,
     upsertOffer,
     deleteOffer,
+    upsertBanner,
+    deleteBanner,
+    rankingSettings,
+    updateRankingSettings,
     upsertCoupon,
     deleteCoupon,
     updatePlatformGeneral,

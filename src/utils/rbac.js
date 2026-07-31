@@ -30,17 +30,21 @@ export const ASSIGNABLE_ROLES = [
 export function canAccessPath(role, pathname) {
   if (!role) return false
   const normalized = (pathname || '/').replace(/\/$/, '') || '/'
-  if (normalized === '/platform-settings') {
+  if (normalized === '/platform-settings' || normalized === '/invoice-settings') {
     return role === ROLES.SUPER_ADMIN
   }
   if (role === ROLES.SUPER_ADMIN) return true
-  if (role === ROLES.TECHNICIAN_MANAGER) return normalized === '/technicians'
-  if (role === ROLES.BOOKING_MANAGER) return normalized === '/bookings'
+  if (role === ROLES.TECHNICIAN_MANAGER) {
+    return ['/technicians', '/peak-hours', '/paused-jobs', '/scheduling-settings'].includes(normalized)
+  }
+  if (role === ROLES.BOOKING_MANAGER) {
+    return ['/bookings', '/paused-jobs', '/location-history', '/revisits', '/invoices'].includes(normalized)
+  }
   if (role === ROLES.SERVICE_MANAGER) {
-    return ['/services', '/coming-soon-services', '/additional-services', '/import-services', '/offers', '/coupons'].includes(normalized)
+    return ['/services', '/coming-soon-services', '/additional-services', '/import-services', '/offers', '/banners', '/coupons'].includes(normalized)
   }
   if (role === 'supportManager') {
-    return ['/bookings', '/customers'].includes(normalized)
+    return ['/bookings', '/customers', '/paused-jobs', '/location-history', '/revisits'].includes(normalized)
   }
   return false
 }

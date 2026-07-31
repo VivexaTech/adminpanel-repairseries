@@ -64,11 +64,48 @@ service cloud.firestore {
       ]);
     }
 
+    function technicianPausePatchOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status',
+        'currentPause',
+        'pauseHistory',
+        'pausedAt',
+        'resumedAt',
+        'updatedAt',
+      ])
+      && (
+        (resource.data.status == 'InProgress' && request.resource.data.status == 'Paused')
+        || (resource.data.status == 'Paused' && request.resource.data.status == 'InProgress')
+      );
+    }
+
+    function customerLocationPatchOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'name',
+        'email',
+        'phone',
+        'address',
+        'addresses',
+        'lastUsedAddress',
+        'photoURL',
+        'photoUrl',
+        'devicePushToken',
+        'devicePushPlatform',
+        'devicePushType',
+        'pushToken',
+        'pushTokenUpdatedAt',
+        'latestLocation',
+        'locationUpdatedAt',
+        'updatedAt',
+      ]);
+    }
+
     // Customer user app: Approve / reject add-on batch (must match booking math in app or Cloud Function).
     function customerAddOnDecisionPatchOnly() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         'addOnServices',
         'addOnApprovalRequest',
+        'extrasApprovalRequest',
         'originalBookingAmount',
         'addedServicesAmount',
         'finalBookingAmount',
@@ -84,6 +121,41 @@ service cloud.firestore {
       ]);
     }
 
+    function customerPaymentConfirmPatchOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'paymentStatus',
+        'paymentMethod',
+        'paidAt',
+        'status',
+        'completedAt',
+        'paymentRequest',
+        'updatedAt',
+      ])
+      && resource.data.paymentRequest.status == 'pending'
+      && request.resource.data.paymentStatus == 'paid'
+      && request.resource.data.status == 'Completed';
+    }
+
+    // Customer claims a free revisit: only revisit bookkeeping fields may change on the parent booking.
+    function customerRevisitParentPatchOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'revisitChildrenCount',
+        'revisitHistory',
+        'lastRevisitAt',
+        'updatedAt',
+      ]);
+    }
+
+    // Customer app/website links a client-generated invoice to their own booking.
+    function customerInvoiceLinkPatchOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'invoiceId',
+        'invoiceNumber',
+        'invoiceCreatedAt',
+        'updatedAt',
+      ]);
+    }
+
     match /adminUsers/{userId} {
       allow read: if authed() && (
         request.auth.uid == userId ||
@@ -95,8 +167,22 @@ service cloud.firestore {
     }
 
     match /customers/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager();
-      allow write: if isSuperAdmin();
+      allow read: if isSuperAdmin() || isBookingManager()
+        || (authed() && request.auth.uid == docId);
+      allow create: if isSuperAdmin() || (authed() && request.auth.uid == docId);
+      allow update: if isSuperAdmin()
+        || (authed() && request.auth.uid == docId && customerLocationPatchOnly());
+      allow delete: if isSuperAdmin();
+    }
+
+    match /customers/{customerId}/locationHistory/{historyId} {
+      allow read: if isSuperAdmin() || isBookingManager()
+        || (authed() && request.auth.uid == customerId);
+      allow create: if authed()
+        && request.auth.uid == customerId
+        && request.resource.data.latitude is number
+        && request.resource.data.longitude is number;
+      allow update, delete: if false;
     }
 
     match /technicians/{docId} {
@@ -118,17 +204,28 @@ service cloud.firestore {
 
     match /bookings/{docId} {
       allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager()
-        || technicianOwnsBookingData(resource.data);
-      allow create: if isSuperAdmin() || isBookingManager();
+        || technicianOwnsBookingData(resource.data)
+        || customerOwnsBooking(resource.data);
+      allow create: if isSuperAdmin() || isBookingManager()
+        || (authed()
+          && request.resource.data.customerId == request.auth.uid);
       allow update: if isSuperAdmin() || isBookingManager()
         || (technicianOwnsBookingData(resource.data)
             && request.resource.data.technicianId == resource.data.technicianId
             && request.resource.data.customerId == resource.data.customerId
-            && technicianApprovalRequestPatchOnly())
+            && (
+              technicianApprovalRequestPatchOnly()
+              || technicianPausePatchOnly()
+            ))
         || (customerOwnsBooking(resource.data)
             && request.resource.data.technicianId == resource.data.technicianId
             && request.resource.data.customerId == resource.data.customerId
-            && customerAddOnDecisionPatchOnly());
+            && (
+              customerAddOnDecisionPatchOnly()
+              || customerPaymentConfirmPatchOnly()
+              || customerRevisitParentPatchOnly()
+              || customerInvoiceLinkPatchOnly()
+            ));
       allow delete: if isSuperAdmin() || isBookingManager();
     }
 
@@ -160,7 +257,13 @@ service cloud.firestore {
     }
 
     match /offers/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
+      allow read: if true;
+      allow write: if isSuperAdmin() || isServiceManager();
+    }
+
+    // Section banners for user app + website (public read of catalog media)
+    match /banners/{docId} {
+      allow read: if true;
       allow write: if isSuperAdmin() || isServiceManager();
     }
 
@@ -170,8 +273,17 @@ service cloud.firestore {
     }
 
     match /settings/{docId} {
-      allow read: if isActiveAdmin();
-      allow write: if isSuperAdmin();
+      allow read: if true;
+      allow write: if isSuperAdmin()
+        || (isTechnicianManager() && (docId == 'ranking' || docId == 'scheduling'));
+    }
+
+    // Tax invoices — written only by Next.js Admin SDK API (Spark-safe).
+    // Customers may read their own invoice metadata (incl. Cloudinary PDF URL). Technicians cannot.
+    match /invoices/{invoiceId} {
+      allow read: if isSuperAdmin() || isBookingManager()
+        || (authed() && resource.data.customerId == request.auth.uid);
+      allow create, update, delete: if false;
     }
 
     match /{document=**} {

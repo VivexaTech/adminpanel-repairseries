@@ -32,6 +32,10 @@ import { geocodeAddressString } from '../services/geocode'
 import { getBookingLatLng, getTechnicianLatLng, haversineDistanceKm, parseCoord, parseCoordLng } from '../utils/geo'
 import { isTechnicianAssignable } from '../utils/technicianVerification'
 import { BookingWorkProofSection } from '../components/BookingWorkProofSection'
+import {
+  DEFAULT_SCHEDULING_SETTINGS,
+  subscribeSchedulingSettings,
+} from '../services/schedulingSettings'
 
 const statusPriority = { New: 1, Assigned: 2, Started: 3, Pending: 3, Completed: 5 }
 
@@ -323,6 +327,12 @@ function BookingPricingSection({
 }
 
 export function BookingsPage() {
+  const [schedulingSettings, setSchedulingSettings] = useState(DEFAULT_SCHEDULING_SETTINGS)
+  useEffect(() => {
+    const unsubscribe = subscribeSchedulingSettings(setSchedulingSettings, () => {})
+    return () => unsubscribe?.()
+  }, [])
+
   const {
     bookings,
     customers,
@@ -447,7 +457,10 @@ export function BookingsPage() {
         return
       }
 
-      const descriptors = getSlotDescriptorsForBookingWindow(start, durationMinutes)
+      const descriptors = getSlotDescriptorsForBookingWindow(
+        start,
+        durationMinutes + schedulingSettings.travelBufferMinutes,
+      )
       if (!descriptors.length) {
         setCreateAvailability({
           loading: false,
@@ -511,6 +524,7 @@ export function BookingsPage() {
     serviceMap,
     assignableRoster,
     platformSettings?.defaultTechnicianServiceRadiusKm,
+    schedulingSettings.travelBufferMinutes,
   ])
 
   const baseCreateTechnicians = useMemo(
@@ -555,7 +569,10 @@ export function BookingsPage() {
 
       const service = serviceMap[booking.serviceId]
       const durationMinutes = Number(booking.durationMinutes || 60)
-      const descriptors = getSlotDescriptorsForBookingWindow(bookingStart, durationMinutes)
+      const descriptors = getSlotDescriptorsForBookingWindow(
+        bookingStart,
+        durationMinutes + schedulingSettings.travelBufferMinutes,
+      )
       if (!descriptors.length) {
         setAvailability({
           loading: false,
@@ -603,6 +620,7 @@ export function BookingsPage() {
     assignableRoster,
     platformSettings?.defaultTechnicianServiceRadiusKm,
     serviceMap,
+    schedulingSettings.travelBufferMinutes,
   ])
 
   useEffect(() => {
@@ -697,6 +715,7 @@ export function BookingsPage() {
                 >
                   {booking.status || 'Unknown'}
                 </Badge>
+                {booking.isRevisit === true ? <Badge tone="info">Revisit</Badge> : null}
               </div>
               <p className="text-sm text-slate-500 dark:text-slate-400">
                 Service: {booking.serviceName}
@@ -854,6 +873,107 @@ export function BookingsPage() {
                       {modalState.booking.paymentStatus}
                     </p>
                   ) : null}
+                  <div className="mt-3 space-y-2 rounded-xl border border-orange-200/70 bg-orange-50/60 p-3 dark:border-orange-500/20 dark:bg-orange-500/10">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-orange-800 dark:text-orange-200">
+                      Invoice
+                    </p>
+                    <p className="text-slate-700 dark:text-slate-300">
+                      <span className="text-slate-500 dark:text-slate-400">Status: </span>
+                      {modalState.booking.invoiceStatus ||
+                        (modalState.booking.invoicePdfUrl ? 'issued' : '—')}
+                    </p>
+                    <p className="text-slate-700 dark:text-slate-300">
+                      <span className="text-slate-500 dark:text-slate-400">Number: </span>
+                      {modalState.booking.invoiceNumber || '—'}
+                    </p>
+                    <p className="text-slate-700 dark:text-slate-300">
+                      <span className="text-slate-500 dark:text-slate-400">Date: </span>
+                      {formatDateTime(
+                        modalState.booking.invoiceCreatedAt?.toDate?.() ||
+                          modalState.booking.invoiceCreatedAt,
+                      )}
+                    </p>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <Button
+                        variant="ghost"
+                        disabled={!modalState.booking.invoicePdfUrl}
+                        onClick={() =>
+                          window.open(
+                            modalState.booking.invoicePdfUrl,
+                            '_blank',
+                            'noopener,noreferrer',
+                          )
+                        }
+                      >
+                        View Invoice
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={!modalState.booking.invoicePdfUrl}
+                        onClick={() =>
+                          window.open(
+                            modalState.booking.invoicePdfUrl,
+                            '_blank',
+                            'noopener,noreferrer',
+                          )
+                        }
+                      >
+                        Download PDF
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={!modalState.booking.invoicePdfUrl}
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(modalState.booking.invoicePdfUrl)
+                            toast.success('Cloudinary URL copied')
+                          } catch {
+                            toast.error('Could not copy URL')
+                          }
+                        }}
+                      >
+                        Copy URL
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={!modalState.booking.invoicePdfUrl && !modalState.booking.invoiceId}
+                        onClick={async () => {
+                          try {
+                            const { resendInvoiceEmail } = await import('../services/invoiceFunctions')
+                            await resendInvoiceEmail({
+                              bookingId: modalState.booking.id,
+                              invoiceId: modalState.booking.invoiceId,
+                            })
+                            toast.success('Invoice email resent')
+                          } catch (e) {
+                            toast.error(e.message || 'Resend failed')
+                          }
+                        }}
+                      >
+                        Resend Email
+                      </Button>
+                      <Button
+                        onClick={async () => {
+                          try {
+                            const { regenerateInvoice } = await import('../services/invoiceFunctions')
+                            const result = await regenerateInvoice({
+                              bookingId: modalState.booking.id,
+                              sendEmail: true,
+                            })
+                            toast.success(
+                              result?.invoiceNumber
+                                ? `Invoice ${result.invoiceNumber} ready`
+                                : 'Invoice regenerated',
+                            )
+                          } catch (e) {
+                            toast.error(e.message || 'Regenerate failed')
+                          }
+                        }}
+                      >
+                        Regenerate Invoice
+                      </Button>
+                    </div>
+                  </div>
                   <p className="whitespace-pre-wrap break-words text-slate-700 dark:text-slate-300">
                     <span className="block text-slate-500 dark:text-slate-400">Job address</span>
                     {formatBookingAddressForDisplay(modalState.booking.address)}

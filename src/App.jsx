@@ -16,7 +16,15 @@ import { PlatformSettingsPage } from './pages/PlatformSettingsPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { TechniciansPage } from './pages/TechniciansPage'
 import { OffersPage } from './pages/OffersPage'
+import { BannersPage } from './pages/BannersPage'
+import { PeakHoursPage } from './pages/PeakHoursPage'
+import { LocationHistoryPage } from './pages/LocationHistoryPage'
+import { PausedJobsPage } from './pages/PausedJobsPage'
+import { SchedulingSettingsPage } from './pages/SchedulingSettingsPage'
 import { CouponsPage } from './pages/CouponsPage'
+import { RevisitsPage } from './pages/RevisitsPage'
+import { InvoicesPage } from './pages/InvoicesPage'
+import { InvoiceSettingsPage } from './pages/InvoiceSettingsPage'
 import { canAccessPath, getDefaultRoute } from './utils/rbac'
 
 function ProtectedRoute({ children }) {
@@ -131,6 +139,14 @@ function App() {
           }
         />
         <Route
+          path="/banners"
+          element={
+            <ProtectedRoute>
+              <BannersPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/offers"
           element={
             <ProtectedRoute>
@@ -139,10 +155,66 @@ function App() {
           }
         />
         <Route
+          path="/peak-hours"
+          element={
+            <ProtectedRoute>
+              <PeakHoursPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/location-history"
+          element={
+            <ProtectedRoute>
+              <LocationHistoryPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/paused-jobs"
+          element={
+            <ProtectedRoute>
+              <PausedJobsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/scheduling-settings"
+          element={
+            <ProtectedRoute>
+              <SchedulingSettingsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/coupons"
           element={
             <ProtectedRoute>
               <CouponsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/revisits"
+          element={
+            <ProtectedRoute>
+              <RevisitsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/invoices"
+          element={
+            <ProtectedRoute>
+              <InvoicesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/invoice-settings"
+          element={
+            <ProtectedRoute>
+              <InvoiceSettingsPage />
             </ProtectedRoute>
           }
         />

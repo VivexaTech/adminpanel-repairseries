@@ -4,6 +4,12 @@ import { Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Textarea, Badge } from '../components/ui'
 import { KeyPointsInput } from '../components/KeyPointsInput'
+import {
+  DEFAULT_REVISIT_POLICY,
+  REVISIT_TYPES,
+  REVISIT_VALIDITY_UNITS,
+  normalizeRevisitPolicy,
+} from '../constants/revisitPolicy'
 import { useApp } from '../context/useApp'
 import { exportServicesCsv } from '../services/serviceCsvExport'
 import { uploadToCloudinary } from '../services/cloudinary'
@@ -38,6 +44,14 @@ const initialService = {
   brands: [],
   processSteps: [],
   status: 'Active',
+  revisitPolicy: {
+    enabled: false,
+    type: 'fixed_count',
+    freeRevisitCount: '2',
+    maxRevisitsInPeriod: '0',
+    validityValue: '30',
+    validityUnit: 'days',
+  },
 }
 
 const initialCategory = { id: '', name: '', icon: '' }
@@ -190,6 +204,17 @@ export function ServicesPage() {
       extraPoint: source.extraPoint || '',
       description: source.description || '',
       imageMode: getServiceImageMode(source),
+      revisitPolicy: (() => {
+        const p = normalizeRevisitPolicy(source.revisitPolicy || DEFAULT_REVISIT_POLICY)
+        return {
+          enabled: p.enabled,
+          type: p.type,
+          freeRevisitCount: String(p.freeRevisitCount),
+          maxRevisitsInPeriod: String(p.maxRevisitsInPeriod),
+          validityValue: String(p.validityValue),
+          validityUnit: p.validityUnit,
+        }
+      })(),
     }
     try {
       const newId = await upsertService(duplicatePayload, {
@@ -287,6 +312,7 @@ export function ServicesPage() {
         visitingCharge: Number(serviceForm.visitingCharge || 0),
         duration: Number(serviceForm.duration),
         keyPoints: serviceForm.keyPoints,
+        revisitPolicy: normalizeRevisitPolicy(serviceForm.revisitPolicy || DEFAULT_REVISIT_POLICY),
         processSteps: serviceForm.processSteps
           .filter((s) => s && (String(s.title || '').trim() || String(s.description || '').trim()))
           .map((s) => {
@@ -484,6 +510,17 @@ export function ServicesPage() {
                           price: String(service.hasVariations ? '' : service.price ?? ''),
                           visitingCharge: String(service.visitingCharge ?? ''),
                           duration: String(service.duration ?? ''),
+                          revisitPolicy: (() => {
+                            const p = normalizeRevisitPolicy(service.revisitPolicy || DEFAULT_REVISIT_POLICY)
+                            return {
+                              enabled: p.enabled,
+                              type: p.type,
+                              freeRevisitCount: String(p.freeRevisitCount),
+                              maxRevisitsInPeriod: String(p.maxRevisitsInPeriod),
+                              validityValue: String(p.validityValue),
+                              validityUnit: p.validityUnit,
+                            }
+                          })(),
                         })
                         setServiceOpen(true)
                       }}
@@ -776,6 +813,123 @@ export function ServicesPage() {
               <option>Inactive</option>
             </Select>
           </Field>
+
+          <div className="md:col-span-2 rounded-2xl border border-[var(--outline-variant)] bg-[var(--surface-low)]/40 p-4">
+            <p className="text-sm font-semibold text-[var(--on-surface)]">Revisit policy</p>
+            <p className="mt-1 text-xs text-[var(--on-surface-variant)]">
+              Configure free revisits for this service. Customers can claim from the app and website when eligible.
+            </p>
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <Field label="Enable revisits">
+                <Select
+                  value={serviceForm.revisitPolicy?.enabled ? 'true' : 'false'}
+                  onChange={(event) =>
+                    setServiceForm({
+                      ...serviceForm,
+                      revisitPolicy: {
+                        ...serviceForm.revisitPolicy,
+                        enabled: event.target.value === 'true',
+                      },
+                    })
+                  }
+                >
+                  <option value="false">Disabled</option>
+                  <option value="true">Enabled</option>
+                </Select>
+              </Field>
+              <Field label="Revisit type">
+                <Select
+                  value={serviceForm.revisitPolicy?.type || 'fixed_count'}
+                  onChange={(event) =>
+                    setServiceForm({
+                      ...serviceForm,
+                      revisitPolicy: {
+                        ...serviceForm.revisitPolicy,
+                        type: event.target.value,
+                      },
+                    })
+                  }
+                >
+                  {REVISIT_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              {serviceForm.revisitPolicy?.type === 'fixed_count' ? (
+                <Field label="Free revisit count">
+                  <Input
+                    type="number"
+                    min="0"
+                    value={serviceForm.revisitPolicy?.freeRevisitCount ?? '2'}
+                    onChange={(event) =>
+                      setServiceForm({
+                        ...serviceForm,
+                        revisitPolicy: {
+                          ...serviceForm.revisitPolicy,
+                          freeRevisitCount: event.target.value,
+                        },
+                      })
+                    }
+                  />
+                </Field>
+              ) : (
+                <Field label="Max revisits in period (0 = unlimited)">
+                  <Input
+                    type="number"
+                    min="0"
+                    value={serviceForm.revisitPolicy?.maxRevisitsInPeriod ?? '0'}
+                    onChange={(event) =>
+                      setServiceForm({
+                        ...serviceForm,
+                        revisitPolicy: {
+                          ...serviceForm.revisitPolicy,
+                          maxRevisitsInPeriod: event.target.value,
+                        },
+                      })
+                    }
+                  />
+                </Field>
+              )}
+              <Field label="Validity value">
+                <Input
+                  type="number"
+                  min="1"
+                  value={serviceForm.revisitPolicy?.validityValue ?? '30'}
+                  onChange={(event) =>
+                    setServiceForm({
+                      ...serviceForm,
+                      revisitPolicy: {
+                        ...serviceForm.revisitPolicy,
+                        validityValue: event.target.value,
+                      },
+                    })
+                  }
+                />
+              </Field>
+              <Field label="Validity unit">
+                <Select
+                  value={serviceForm.revisitPolicy?.validityUnit || 'days'}
+                  onChange={(event) =>
+                    setServiceForm({
+                      ...serviceForm,
+                      revisitPolicy: {
+                        ...serviceForm.revisitPolicy,
+                        validityUnit: event.target.value,
+                      },
+                    })
+                  }
+                >
+                  {REVISIT_VALIDITY_UNITS.map((u) => (
+                    <option key={u.value} value={u.value}>
+                      {u.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+          </div>
 
           <div className="md:col-span-2 rounded-2xl border border-[var(--outline-variant)] bg-[var(--surface-low)]/40 p-4">
             <p className="text-sm font-semibold text-[var(--on-surface)]">Service images (Cloudinary)</p>

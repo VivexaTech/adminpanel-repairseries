@@ -21,6 +21,34 @@ import { getStoredBookingTotalDeduction } from '../utils/bookingStoredAmounts'
 export function DashboardPage() {
   const { bookings, customers, metrics, loading } = useApp()
 
+  const revisitAnalytics = useMemo(() => {
+    const revisits = bookings.filter(
+      (booking) => booking?.isRevisit === true || Boolean(booking?.parentBookingId),
+    )
+    const statusOf = (booking) => String(booking.status || '').trim().toLowerCase()
+    const completed = revisits.filter((booking) => statusOf(booking) === 'completed').length
+    const failed = revisits.filter((booking) =>
+      ['failed', 'cancelled', 'canceled'].includes(statusOf(booking)),
+    ).length
+    const serviceCounts = new Map()
+    revisits.forEach((booking) => {
+      const name = String(booking.serviceName || 'Unknown service').trim() || 'Unknown service'
+      serviceCounts.set(name, (serviceCounts.get(name) || 0) + 1)
+    })
+    const mostRevisitedServices = [...serviceCounts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+      .slice(0, 5)
+
+    return {
+      total: revisits.length,
+      pending: Math.max(0, revisits.length - completed - failed),
+      completed,
+      failed,
+      mostRevisitedServices,
+    }
+  }, [bookings])
+
   const chartData = useMemo(() => {
     const now = new Date()
     const months = Array.from({ length: 6 }).map((_, idx) => {
@@ -80,6 +108,61 @@ export function DashboardPage() {
             <p className="mt-4 text-3xl font-semibold text-slate-900 dark:text-white">{card.value}</p>
           </Card>
         ))}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+        <Card>
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Revisit overview</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Current lifecycle totals for free revisit bookings.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              { label: 'Total Revisits', value: revisitAnalytics.total },
+              { label: 'Pending Revisits', value: revisitAnalytics.pending },
+              { label: 'Completed Revisits', value: revisitAnalytics.completed },
+              { label: 'Failed Revisits', value: revisitAnalytics.failed },
+            ].map((item) => (
+              <div
+                key={item.label}
+                className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800"
+              >
+                <p className="text-sm text-slate-500 dark:text-slate-400">{item.label}</p>
+                <p className="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">
+                  {compactNumber(item.value)}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card>
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+            Most revisited services
+          </h3>
+          <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">
+            Services ranked by revisit booking count.
+          </p>
+          {revisitAnalytics.mostRevisitedServices.length ? (
+            <ol className="space-y-3">
+              {revisitAnalytics.mostRevisitedServices.map((service, index) => (
+                <li
+                  key={service.name}
+                  className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 px-4 py-3 dark:border-slate-800"
+                >
+                  <span className="min-w-0 truncate text-sm font-medium text-slate-900 dark:text-white">
+                    {index + 1}. {service.name}
+                  </span>
+                  <Badge tone="info">{compactNumber(service.count)}</Badge>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="text-sm text-slate-500 dark:text-slate-400">No revisit data yet.</p>
+          )}
+        </Card>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
