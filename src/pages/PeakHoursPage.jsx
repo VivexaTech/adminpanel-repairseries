@@ -33,6 +33,16 @@ export function PeakHoursPage() {
   const [cancellationPenaltyScore, setCancellationPenaltyScore] = useState(
     String(DEFAULT_SCORE_REWARDS.cancellationPenalty),
   )
+  const [revisitFreeJobs, setRevisitFreeJobs] = useState('20')
+  const [revisitGold, setRevisitGold] = useState('6')
+  const [revisitSilver, setRevisitSilver] = useState('8')
+  const [revisitBronze, setRevisitBronze] = useState('10')
+  const [jobsGold, setJobsGold] = useState('20')
+  const [jobsSilver, setJobsSilver] = useState('24')
+  const [jobsBronze, setJobsBronze] = useState('30')
+  const [peakGold, setPeakGold] = useState('30')
+  const [peakSilver, setPeakSilver] = useState('34')
+  const [peakBronze, setPeakBronze] = useState('38')
 
   useEffect(() => {
     const rs = rankingSettings || {}
@@ -57,6 +67,16 @@ export function PeakHoursPage() {
     setCompletedBookingScore(String(rewards.completedBooking))
     setCompletedRevisitScore(String(rewards.completedRevisit))
     setCancellationPenaltyScore(String(rewards.cancellationPenalty))
+    setRevisitFreeJobs(String(rs.revisitFreeLimit ?? 20))
+    setRevisitGold(String(rs.revisitPctTargets?.gold ?? 6))
+    setRevisitSilver(String(rs.revisitPctTargets?.silver ?? 8))
+    setRevisitBronze(String(rs.revisitPctTargets?.bronze ?? 10))
+    setJobsGold(String(rs.jobsTargets?.gold ?? 20))
+    setJobsSilver(String(rs.jobsTargets?.silver ?? 24))
+    setJobsBronze(String(rs.jobsTargets?.bronze ?? 30))
+    setPeakGold(String(rs.peakHoursTargets?.gold ?? 30))
+    setPeakSilver(String(rs.peakHoursTargets?.silver ?? 34))
+    setPeakBronze(String(rs.peakHoursTargets?.bronze ?? 38))
   }, [rankingSettings])
 
   const onSave = async (e) => {
@@ -90,6 +110,26 @@ export function PeakHoursPage() {
       toast.error('Score rewards must be 0 or more.')
       return
     }
+    const rf = Number(revisitFreeJobs)
+    const rp = {
+      gold: Number(revisitGold),
+      silver: Number(revisitSilver),
+      bronze: Number(revisitBronze),
+    }
+    const jt = {
+      gold: Number(jobsGold),
+      silver: Number(jobsSilver),
+      bronze: Number(jobsBronze),
+    }
+    const pt = {
+      gold: Number(peakGold),
+      silver: Number(peakSilver),
+      bronze: Number(peakBronze),
+    }
+    if (![rf, ...Object.values(rp), ...Object.values(jt), ...Object.values(pt)].every((n) => Number.isFinite(n) && n >= 0)) {
+      toast.error('Rank metric targets must be 0 or more.')
+      return
+    }
     try {
       await updateRankingSettings({
         peakWindows: windows,
@@ -109,6 +149,11 @@ export function PeakHoursPage() {
         // Keep legacy slot fields in sync with first window for older clients
         peakHourSlotStart: Math.max(0, Number(windows[0]?.startHour ?? 9) - 8),
         peakHourSlotEnd: Math.max(0, Number(windows[0]?.endHour ?? 11) - 8),
+        revisitFreeLimit: rf,
+        revisitPctTargets: rp,
+        jobsTargets: jt,
+        peakHoursTargets: pt,
+        peakHoursTarget: pt.silver,
       })
     } catch (err) {
       toast.error(err?.message || 'Could not save peak hour settings.')
@@ -217,6 +262,49 @@ export function PeakHoursPage() {
             <Field label="Gold threshold">
               <Input type="number" min="0" value={gold} onChange={(e) => setGold(e.target.value)} disabled={busy} />
             </Field>
+          </div>
+
+          <div>
+            <h3 className="text-base font-semibold text-[var(--on-surface)]">Rank metric targets</h3>
+            <p className="mt-1 text-sm text-[var(--on-surface-variant)]">
+              Technician Target tab detail screens (UC-style): revisit %, jobs, and peak unavailable hours per tier.
+            </p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-4">
+              <Field label="Revisit free jobs">
+                <Input type="number" min="0" value={revisitFreeJobs} onChange={(e) => setRevisitFreeJobs(e.target.value)} disabled={busy} />
+              </Field>
+              <Field label="Revisit % Gold">
+                <Input type="number" min="0" value={revisitGold} onChange={(e) => setRevisitGold(e.target.value)} disabled={busy} />
+              </Field>
+              <Field label="Revisit % Silver">
+                <Input type="number" min="0" value={revisitSilver} onChange={(e) => setRevisitSilver(e.target.value)} disabled={busy} />
+              </Field>
+              <Field label="Revisit % Bronze">
+                <Input type="number" min="0" value={revisitBronze} onChange={(e) => setRevisitBronze(e.target.value)} disabled={busy} />
+              </Field>
+            </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+              <Field label="Jobs Gold">
+                <Input type="number" min="0" value={jobsGold} onChange={(e) => setJobsGold(e.target.value)} disabled={busy} />
+              </Field>
+              <Field label="Jobs Silver">
+                <Input type="number" min="0" value={jobsSilver} onChange={(e) => setJobsSilver(e.target.value)} disabled={busy} />
+              </Field>
+              <Field label="Jobs Bronze">
+                <Input type="number" min="0" value={jobsBronze} onChange={(e) => setJobsBronze(e.target.value)} disabled={busy} />
+              </Field>
+            </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+              <Field label="Peak hours Gold">
+                <Input type="number" min="0" value={peakGold} onChange={(e) => setPeakGold(e.target.value)} disabled={busy} />
+              </Field>
+              <Field label="Peak hours Silver">
+                <Input type="number" min="0" value={peakSilver} onChange={(e) => setPeakSilver(e.target.value)} disabled={busy} />
+              </Field>
+              <Field label="Peak hours Bronze">
+                <Input type="number" min="0" value={peakBronze} onChange={(e) => setPeakBronze(e.target.value)} disabled={busy} />
+              </Field>
+            </div>
           </div>
 
           <div>

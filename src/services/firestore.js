@@ -5,7 +5,9 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   onSnapshot,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -18,10 +20,26 @@ const ensureDb = () => {
   if (!isFirebaseConfigured || !db) throw new Error('Firebase is not configured.')
 }
 
-export const subscribeCollection = (collectionName, onData, onError) => {
+/**
+ * Realtime listener for a collection.
+ * @param {object} [options]
+ * @param {string} [options.orderByField]
+ * @param {'asc'|'desc'} [options.orderDirection]
+ * @param {number} [options.limit]
+ */
+export const subscribeCollection = (collectionName, onData, onError, options = {}) => {
   ensureDb()
+  const constraints = []
+  if (options.orderByField) {
+    constraints.push(orderBy(options.orderByField, options.orderDirection || 'desc'))
+  }
+  if (options.limit != null && Number(options.limit) > 0) {
+    constraints.push(limit(Number(options.limit)))
+  }
+  const ref = collection(db, collectionName)
+  const q = constraints.length ? query(ref, ...constraints) : ref
   return onSnapshot(
-    collection(db, collectionName),
+    q,
     (snapshot) => {
       const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
       onData(rows, snapshot.docChanges())

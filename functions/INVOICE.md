@@ -1,10 +1,12 @@
-# LEGACY — do not use on Firebase Spark
+# Invoice PDF — Vercel only (no Firebase Cloud Functions)
 
-Invoice generation was moved to the **Next.js website** (Spark-safe):
+Invoice generation runs on the **Next.js website** (Spark-safe / free Vercel functions):
 
 - `POST /api/invoices/generate`
 - `POST /api/invoices/resend-email`
 
-See: `website/src/lib/invoice/server/SPARK.md`
+Admin panel calls `VITE_WEBSITE_API_URL` (see `src/services/invoiceFunctions.js`).
 
-`functions/index.js` exports nothing so Cloud Functions are not required for invoices.
+Customer app calls `EXPO_PUBLIC_WEBSITE_API_URL`.
+
+See: `repair-series-website/src/lib/invoice/server/SPARK.md`

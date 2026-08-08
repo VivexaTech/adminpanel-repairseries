@@ -37,7 +37,51 @@ import {
   subscribeSchedulingSettings,
 } from '../services/schedulingSettings'
 
-const statusPriority = { New: 1, Assigned: 2, Started: 3, Pending: 3, Completed: 5 }
+const statusPriority = {
+  New: 1,
+  Assigned: 2,
+  Pending: 2,
+  InProgress: 3,
+  Started: 3,
+  Paused: 3,
+  Completed: 5,
+  Cancelled: 6,
+  Canceled: 6,
+}
+
+function bookingStatusTone(status) {
+  const s = String(status || '')
+  if (s === 'Completed') return 'success'
+  if (s === 'Assigned' || s === 'InProgress' || s === 'Started') return 'info'
+  if (s === 'Paused' || s === 'Pending') return 'warning'
+  if (s === 'Cancelled' || s === 'Canceled') return 'danger'
+  return 'warning'
+}
+
+function bookingListTitle(booking) {
+  return String(booking.bookingCode || booking.id || 'Booking').trim()
+}
+
+function toDateTimeLocal(ts) {
+  const d = ts?.toDate?.() ? ts.toDate() : ts instanceof Date ? ts : ts ? new Date(ts) : null
+  if (!d || Number.isNaN(d.getTime())) return ''
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function getTechnicianRankingScore(technician) {
+  const n = Number(
+    technician?.rankingScore ?? technician?.performanceScore ?? technician?.score ?? technician?.totalScore,
+  )
+  return Number.isFinite(n) ? n : 0
+}
+
+function technicianDistanceKm(technician, bookingLatLng) {
+  const { lat: tLat, lng: tLng } = getTechnicianLatLng(technician)
+  const { lat: bLat, lng: bLng } = bookingLatLng || {}
+  if (tLat == null || tLng == null || bLat == null || bLng == null) return null
+  return haversineDistanceKm(tLat, tLng, bLat, bLng)
+}
 
 function technicianWithinBookingRadius(technician, bookingLatLng, platformKm) {
   const { lat: tLat, lng: tLng } = getTechnicianLatLng(technician)
@@ -48,6 +92,16 @@ function technicianWithinBookingRadius(technician, bookingLatLng, platformKm) {
   const { lat: bLat, lng: bLng } = bookingLatLng
   if (bLat == null || bLng == null) return true
   return haversineDistanceKm(tLat, tLng, bLat, bLng) <= maxKm
+}
+
+function isCancellableStatus(status) {
+  const s = String(status || '').toLowerCase().replace(/\s+/g, '')
+  return !['completed', 'cancelled', 'canceled'].includes(s)
+}
+
+function canUnassignStatus(status) {
+  const s = String(status || '').toLowerCase().replace(/\s+/g, '')
+  return ['new', 'assigned', 'pending'].includes(s)
 }
 
 function AddonServicesList({ addOns }) {
@@ -87,6 +141,7 @@ function BookingPricingSection({
   mutatingAddOn = false,
   onResolveApprovalRequest,
   mutatingApprovalRequest = false,
+  onResolveExtrasApproval = null,
 }) {
   const storedTotal = getStoredBookingTotalAmount(booking)
   const storedDeduction = getStoredBookingTotalDeduction(booking)
@@ -110,6 +165,19 @@ function BookingPricingSection({
     String(ar.status || '').toLowerCase() === 'pending' &&
     Array.isArray(ar.lines) &&
     ar.lines.length > 0
+
+  const extrasReq = booking.extrasApprovalRequest
+  const extrasPending = extrasReq && String(extrasReq.status || '').toLowerCase() === 'pending'
+  const extrasLines = [
+    ...(Array.isArray(extrasReq?.proposedAddOnServices) ? extrasReq.proposedAddOnServices : []),
+    ...(Array.isArray(extrasReq?.proposed_add_on_services) ? extrasReq.proposed_add_on_services : []),
+    ...(Array.isArray(extrasReq?.proposedAdditionalServices)
+      ? extrasReq.proposedAdditionalServices
+      : []),
+    ...(Array.isArray(extrasReq?.proposed_additional_services)
+      ? extrasReq.proposed_additional_services
+      : []),
+  ]
 
   const commission = (
     <div className="space-y-2 text-slate-600 dark:text-slate-400">
@@ -154,6 +222,64 @@ function BookingPricingSection({
       ) : null}
     </>
   )
+
+  const techExtrasBlock = extrasPending ? (
+    <div className="rounded-xl border border-orange-300/80 bg-orange-50/70 p-3 dark:border-orange-500/30 dark:bg-orange-950/25">
+      <p className="text-xs font-semibold uppercase tracking-wide text-orange-800 dark:text-orange-200">
+        Technician extras (awaiting approval)
+      </p>
+      <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+        From the technician app (`extrasApprovalRequest`). Approve to apply to the booking total.
+      </p>
+      <ul className="mt-2 space-y-1.5">
+        {extrasLines.length ? (
+          extrasLines.map((line, idx) => (
+            <li
+              key={`extras-${idx}`}
+              className="flex justify-between gap-2 text-sm text-slate-800 dark:text-slate-100"
+            >
+              <span className="min-w-0 truncate">
+                {(line.serviceName || line.title || line.name || 'Item').trim()}
+              </span>
+              <span className="shrink-0 tabular-nums">{currency(line.price)}</span>
+            </li>
+          ))
+        ) : (
+          <li className="text-sm text-slate-600">Pending extras (see booking details / customer app).</li>
+        )}
+      </ul>
+      {extrasReq?.replacementService ? (
+        <p className="mt-2 text-xs text-slate-700 dark:text-slate-300">
+          Replacement service:{' '}
+          <span className="font-semibold">
+            {extrasReq.replacementService.serviceName || extrasReq.replacementService.serviceId}
+          </span>
+        </p>
+      ) : null}
+      {onResolveExtrasApproval ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            className="text-xs"
+            disabled={mutatingApprovalRequest}
+            onClick={() => onResolveExtrasApproval({ approve: true })}
+          >
+            Approve extras
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            className="text-xs text-red-700 dark:text-red-300"
+            disabled={mutatingApprovalRequest}
+            onClick={() => onResolveExtrasApproval({ approve: false })}
+          >
+            Reject extras
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  ) : null
 
   const batchApprovalBlock = batchPending ? (
     <div className="rounded-xl border border-violet-300/80 bg-violet-50/70 p-3 dark:border-violet-500/30 dark:bg-violet-950/25">
@@ -210,6 +336,7 @@ function BookingPricingSection({
 
   const addOnSections = (
     <>
+      {techExtrasBlock}
       {batchApprovalBlock}
       {(extraSum > 0 || additionalSum > 0) && (
         <div className="grid gap-2 text-xs text-slate-600 dark:text-slate-400">
@@ -341,18 +468,25 @@ export function BookingsPage() {
     categories,
     session,
     assignTechnician,
+    unassignTechnician,
+    rescheduleBooking,
+    updateBookingPayment,
     updateBookingStatus,
     createBooking,
     updateBookingAddOnApproval,
     resolveAddOnApprovalRequest,
+    resolveExtrasApprovalRequest,
     backfillMissingBookingCoordinates,
     loading,
     mutating,
     platformSettings,
+    rankingSettings,
   } = useApp()
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [modalState, setModalState] = useState({ mode: null, booking: null })
   const [selectedTechnician, setSelectedTechnician] = useState('')
+  const [rescheduleAt, setRescheduleAt] = useState('')
   const [availability, setAvailability] = useState({ loading: false, busyTechIds: new Set(), error: '' })
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm, setCreateForm] = useState({
@@ -396,14 +530,29 @@ export function BookingsPage() {
     () =>
       bookings
         .filter((booking) => {
+          if (statusFilter !== 'all') {
+            const st = String(booking.status || '')
+            if (statusFilter === 'InProgress') {
+              if (!['InProgress', 'Started', 'Paused'].includes(st)) return false
+            } else if (st !== statusFilter) {
+              return false
+            }
+          }
+          const cust = customerMap[booking.customerId]
           const addOnNames = Array.isArray(booking.addOnServices)
-            ? booking.addOnServices.map((a) => (a && typeof a === 'object' ? a.serviceName ?? a.name : '')).join(' ')
+            ? booking.addOnServices
+                .map((a) => (a && typeof a === 'object' ? a.serviceName ?? a.name : ''))
+                .join(' ')
             : ''
           return [
             booking.id,
+            booking.bookingCode,
             booking.serviceName,
             booking.serviceVariationTitle,
             booking.customerId,
+            cust?.name,
+            cust?.phone,
+            cust?.email,
             booking.status,
             bookingAddressSearchText(booking.address),
             addOnNames,
@@ -417,7 +566,7 @@ export function BookingsPage() {
           const pb = statusPriority[b.status] ?? 99
           return pa - pb
         }),
-    [bookings, search],
+    [bookings, search, statusFilter, customerMap],
   )
 
   const resetCreate = () => {
@@ -640,11 +789,34 @@ export function BookingsPage() {
 
   const availableTechnicians = useMemo(() => {
     const svc = assignBookingService
-    return baseAssignTechnicians.filter((t) => {
+    const filtered = baseAssignTechnicians.filter((t) => {
       if (!svc?.categoryId) return true
       return String(t.categoryId || '').trim() === svc.categoryId
     })
-  }, [baseAssignTechnicians, assignBookingService])
+    const bookingLatLng = modalState.booking ? getBookingLatLng(modalState.booking) : { lat: null, lng: null }
+    const hasRanking =
+      Boolean(rankingSettings?.peakWindows?.length) ||
+      filtered.some((t) => getTechnicianRankingScore(t) > 0)
+    if (!hasRanking) return filtered
+    return [...filtered].sort((a, b) => {
+      const scoreDiff = getTechnicianRankingScore(b) - getTechnicianRankingScore(a)
+      if (scoreDiff !== 0) return scoreDiff
+      const da = technicianDistanceKm(a, bookingLatLng)
+      const db = technicianDistanceKm(b, bookingLatLng)
+      if (da == null && db == null) return String(a.name || '').localeCompare(String(b.name || ''))
+      if (da == null) return 1
+      if (db == null) return -1
+      return da - db
+    })
+  }, [baseAssignTechnicians, assignBookingService, modalState.booking, rankingSettings])
+
+  useEffect(() => {
+    if (!modalState.booking?.id) return
+    const live = bookings.find((b) => b.id === modalState.booking.id)
+    if (live && live !== modalState.booking) {
+      setModalState((cur) => (cur.booking ? { ...cur, booking: live } : cur))
+    }
+  }, [bookings, modalState.booking])
 
   return (
     <div className="space-y-4">
@@ -653,7 +825,24 @@ export function BookingsPage() {
         description="Prioritize new work, assign staff quickly, and keep scheduling clear."
         actions={
           <>
-            <SearchInput value={search} onChange={setSearch} placeholder="Search bookings..." />
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder="Search code, customer, service..."
+            />
+            <Select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="min-w-[140px]"
+            >
+              <option value="all">All statuses</option>
+              <option value="New">New</option>
+              <option value="Assigned">Assigned</option>
+              <option value="InProgress">In progress</option>
+              <option value="Paused">Paused</option>
+              <option value="Completed">Completed</option>
+              <option value="Cancelled">Cancelled</option>
+            </Select>
             <Button onClick={() => setCreateOpen(true)}>Add Booking</Button>
             <Button
               variant="ghost"
@@ -695,27 +884,28 @@ export function BookingsPage() {
             <p className="text-sm text-slate-500 dark:text-slate-400">Loading bookings...</p>
           </Card>
         ) : null}
+        {!loading.bookings && sortedBookings.length === 0 ? (
+          <Card>
+            <p className="text-sm font-medium text-slate-800 dark:text-slate-100">No bookings found</p>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Try another search or status filter, or create a booking.
+            </p>
+          </Card>
+        ) : null}
         {sortedBookings.map((booking) => (
           <Card key={booking.id} className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="grid gap-1">
               <div className="flex flex-wrap items-center gap-3">
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">{booking.id}</h3>
-                <Badge
-                  tone={
-                    booking.status === 'Completed'
-                      ? 'success'
-                      : booking.status === 'Assigned'
-                        ? 'info'
-                        : booking.status === 'Started'
-                          ? 'info'
-                          : booking.status === 'Pending'
-                            ? 'neutral'
-                            : 'warning'
-                  }
-                >
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  {bookingListTitle(booking)}
+                </h3>
+                <Badge tone={bookingStatusTone(booking.status)}>
                   {booking.status || 'Unknown'}
                 </Badge>
                 {booking.isRevisit === true ? <Badge tone="info">Revisit</Badge> : null}
+                {booking.extrasApprovalRequest?.status === 'pending' ? (
+                  <Badge tone="warning">Extras pending</Badge>
+                ) : null}
               </div>
               <p className="text-sm text-slate-500 dark:text-slate-400">
                 Service: {booking.serviceName}
@@ -753,6 +943,13 @@ export function BookingsPage() {
                     toast.error(e.message)
                   }
                 }}
+                onResolveExtrasApproval={async ({ approve }) => {
+                  try {
+                    await resolveExtrasApprovalRequest({ bookingId: booking.id, approve })
+                  } catch (e) {
+                    toast.error(e.message)
+                  }
+                }}
                 mutatingApprovalRequest={Boolean(mutating.bookingApprovalRequest)}
               />
             </div>
@@ -770,13 +967,65 @@ export function BookingsPage() {
               >
                 Assign Technician
               </Button>
+              {booking.technicianId && canUnassignStatus(booking.status) ? (
+                <Button
+                  variant="ghost"
+                  disabled={Boolean(mutating.bookingUnassign)}
+                  onClick={async () => {
+                    if (!window.confirm('Unassign technician and set status back to New?')) return
+                    try {
+                      await unassignTechnician({ bookingId: booking.id })
+                    } catch (e) {
+                      toast.error(e.message)
+                    }
+                  }}
+                >
+                  Unassign
+                </Button>
+              ) : null}
+              {isCancellableStatus(booking.status) ? (
+                <Button
+                  variant="danger"
+                  disabled={Boolean(mutating.bookingStatus)}
+                  onClick={async () => {
+                    const reason = window.prompt(
+                      'Cancel reason (shown for support / customer context):',
+                      'Cancelled by admin',
+                    )
+                    if (reason == null) return
+                    if (!window.confirm('Cancel this booking? Customer will be notified.')) return
+                    try {
+                      await updateBookingStatus({
+                        bookingId: booking.id,
+                        status: 'Cancelled',
+                        cancelReason: reason,
+                        cancelledBy: session?.email || session?.id || 'admin',
+                      })
+                    } catch (e) {
+                      toast.error(e.message)
+                    }
+                  }}
+                >
+                  Cancel
+                </Button>
+              ) : null}
               {booking.status === 'Assigned' ? (
                 <Button
                   variant="secondary"
                   disabled={Boolean(mutating.bookingStatus)}
                   onClick={async () => {
+                    if (
+                      !window.confirm(
+                        'Mark this booking InProgress? Prefer technician OTP flow when possible.',
+                      )
+                    ) {
+                      return
+                    }
                     try {
-                      await updateBookingStatus({ bookingId: booking.id, status: 'Started' })
+                      await updateBookingStatus({
+                        bookingId: booking.id,
+                        status: 'InProgress',
+                      })
                     } catch (e) {
                       toast.error(e.message)
                     }
@@ -785,11 +1034,21 @@ export function BookingsPage() {
                   Mark started
                 </Button>
               ) : null}
-              {booking.status !== 'Completed' && booking.status !== 'New' ? (
+              {booking.status !== 'Completed' &&
+              booking.status !== 'New' &&
+              booking.status !== 'Cancelled' &&
+              booking.status !== 'Canceled' ? (
                 <Button
                   variant="ghost"
                   disabled={Boolean(mutating.bookingStatus)}
                   onClick={async () => {
+                    if (
+                      !window.confirm(
+                        'Mark this booking Completed? This may affect technician earnings.',
+                      )
+                    ) {
+                      return
+                    }
                     try {
                       await updateBookingStatus({ bookingId: booking.id, status: 'Completed' })
                     } catch (e) {
@@ -808,7 +1067,10 @@ export function BookingsPage() {
       <Modal
         open={Boolean(modalState.booking)}
         title={modalState.mode === 'details' ? 'Booking details' : 'Assign Technician'}
-        onClose={() => setModalState({ mode: null, booking: null })}
+        onClose={() => {
+          setModalState({ mode: null, booking: null })
+          setRescheduleAt('')
+        }}
         className={modalState.mode === 'details' ? 'max-w-4xl' : undefined}
       >
         {modalState.booking ? (
@@ -867,12 +1129,120 @@ export function BookingsPage() {
                     <span className="text-slate-500 dark:text-slate-400">Status: </span>
                     {modalState.booking.status || 'Unknown'}
                   </p>
-                  {modalState.booking.paymentStatus ? (
-                    <p className="text-slate-700 dark:text-slate-300">
-                      <span className="text-slate-500 dark:text-slate-400">Payment: </span>
-                      {modalState.booking.paymentStatus}
+                  <p className="text-slate-700 dark:text-slate-300">
+                    <span className="text-slate-500 dark:text-slate-400">Technician: </span>
+                    {modalState.booking.technicianId
+                      ? technicians.find((t) => t.id === modalState.booking.technicianId)?.name ||
+                        modalState.booking.technicianId
+                      : '—'}
+                  </p>
+                  <p className="text-slate-700 dark:text-slate-300">
+                    <span className="text-slate-500 dark:text-slate-400">Payment: </span>
+                    {modalState.booking.paymentStatus || '—'}
+                  </p>
+                  <div className="space-y-2 rounded-xl border border-slate-200 bg-white/70 p-3 dark:border-slate-600 dark:bg-slate-800/40">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Payment ops
                     </p>
-                  ) : null}
+                    <div className="flex flex-wrap gap-2">
+                      {['paid', 'unpaid', 'refunded'].map((status) => (
+                        <Button
+                          key={status}
+                          type="button"
+                          variant="ghost"
+                          className="text-xs capitalize"
+                          disabled={Boolean(mutating.bookingPayment)}
+                          onClick={async () => {
+                            try {
+                              await updateBookingPayment({
+                                bookingId: modalState.booking.id,
+                                paymentStatus: status,
+                              })
+                            } catch (e) {
+                              toast.error(e.message)
+                            }
+                          }}
+                        >
+                          Mark {status}
+                        </Button>
+                      ))}
+                      {modalState.booking.paymentRequest ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="text-xs text-amber-700 dark:text-amber-300"
+                          disabled={Boolean(mutating.bookingPayment)}
+                          onClick={async () => {
+                            try {
+                              await updateBookingPayment({
+                                bookingId: modalState.booking.id,
+                                clearPaymentRequest: true,
+                              })
+                            } catch (e) {
+                              toast.error(e.message)
+                            }
+                          }}
+                        >
+                          Clear payment request
+                        </Button>
+                      ) : null}
+                    </div>
+                    {modalState.booking.paymentRequest ? (
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Stuck request:{' '}
+                        {typeof modalState.booking.paymentRequest === 'object'
+                          ? String(modalState.booking.paymentRequest.status || 'pending')
+                          : 'present'}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2 rounded-xl border border-slate-200 bg-white/70 p-3 dark:border-slate-600 dark:bg-slate-800/40">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Reschedule
+                    </p>
+                    <Field label="New date & time">
+                      <Input
+                        type="datetime-local"
+                        value={
+                          rescheduleAt ||
+                          toDateTimeLocal(
+                            modalState.booking.scheduledAt?.toDate?.() ||
+                              modalState.booking.dateTime ||
+                              modalState.booking.scheduledAt,
+                          )
+                        }
+                        onChange={(e) => setRescheduleAt(e.target.value)}
+                      />
+                    </Field>
+                    <Button
+                      type="button"
+                      disabled={Boolean(mutating.bookingReschedule)}
+                      onClick={async () => {
+                        const value =
+                          rescheduleAt ||
+                          toDateTimeLocal(
+                            modalState.booking.scheduledAt?.toDate?.() ||
+                              modalState.booking.dateTime ||
+                              modalState.booking.scheduledAt,
+                          )
+                        if (!value) {
+                          toast.error('Pick a date and time.')
+                          return
+                        }
+                        try {
+                          await rescheduleBooking({
+                            bookingId: modalState.booking.id,
+                            scheduledAt: value,
+                          })
+                          setRescheduleAt('')
+                        } catch (e) {
+                          toast.error(e.message)
+                        }
+                      }}
+                    >
+                      {mutating.bookingReschedule ? 'Saving…' : 'Save schedule'}
+                    </Button>
+                  </div>
                   <div className="mt-3 space-y-2 rounded-xl border border-orange-200/70 bg-orange-50/60 p-3 dark:border-orange-500/20 dark:bg-orange-500/10">
                     <p className="text-xs font-semibold uppercase tracking-wider text-orange-800 dark:text-orange-200">
                       Invoice
@@ -1006,6 +1376,16 @@ export function BookingsPage() {
                     toast.error(e.message)
                   }
                 }}
+                onResolveExtrasApproval={async ({ approve }) => {
+                  try {
+                    await resolveExtrasApprovalRequest({
+                      bookingId: modalState.booking.id,
+                      approve,
+                    })
+                  } catch (e) {
+                    toast.error(e.message)
+                  }
+                }}
                 onSetAddOnStatus={async (index, status) => {
                   try {
                     await updateBookingAddOnApproval({
@@ -1056,11 +1436,19 @@ export function BookingsPage() {
               ) : null}
               <Select value={selectedTechnician} onChange={(event) => setSelectedTechnician(event.target.value)}>
                 <option value="">Select technician</option>
-                {availableTechnicians.map((technician) => (
-                  <option key={technician.id} value={technician.id}>
-                    {technician.name} • {categoryMap[technician.categoryId] || '—'}
-                  </option>
-                ))}
+                {availableTechnicians.map((technician) => {
+                  const score = getTechnicianRankingScore(technician)
+                  const dist = technicianDistanceKm(technician, getBookingLatLng(modalState.booking))
+                  const distLabel = dist == null ? '' : ` • ${dist.toFixed(1)} km`
+                  const scoreLabel = score > 0 || rankingSettings?.peakWindows?.length ? ` • score ${score}` : ''
+                  return (
+                    <option key={technician.id} value={technician.id}>
+                      {technician.name} • {categoryMap[technician.categoryId] || '—'}
+                      {scoreLabel}
+                      {distLabel}
+                    </option>
+                  )
+                })}
               </Select>
               {!availability.loading && !availability.error && availableTechnicians.length === 0 ? (
                 <p className="text-sm text-amber-700 dark:text-amber-300">No technician available for this slot.</p>

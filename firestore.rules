@@ -42,6 +42,10 @@ service cloud.firestore {
       return isActiveAdmin() && role() == 'serviceManager';
     }
 
+    function isSupportManager() {
+      return isActiveAdmin() && role() == 'supportManager';
+    }
+
     // Technician mobile app: `technicians/{docId}` doc id should match Firebase Auth uid
     // (or align your tech app with however you store `booking.technicianId`).
     function isTechnicianActor() {
@@ -96,6 +100,7 @@ service cloud.firestore {
         'pushTokenUpdatedAt',
         'latestLocation',
         'locationUpdatedAt',
+        'notificationPrefs',
         'updatedAt',
       ]);
     }
@@ -121,19 +126,20 @@ service cloud.firestore {
       ]);
     }
 
-    function customerPaymentConfirmPatchOnly() {
+    // RS App payment confirmation is server-only via confirmCustomerPayment callable.
+    // Do not allow clients to mark bookings paid.
+
+    function customerRatingPatchOnly() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-        'paymentStatus',
-        'paymentMethod',
-        'paidAt',
-        'status',
-        'completedAt',
-        'paymentRequest',
+        'customerRating',
+        'ratedAt',
         'updatedAt',
       ])
-      && resource.data.paymentRequest.status == 'pending'
-      && request.resource.data.paymentStatus == 'paid'
-      && request.resource.data.status == 'Completed';
+      && resource.data.status == 'Completed'
+      && !('customerRating' in resource.data)
+      && request.resource.data.customerRating is int
+      && request.resource.data.customerRating >= 1
+      && request.resource.data.customerRating <= 5;
     }
 
     // Customer claims a free revisit: only revisit bookkeeping fields may change on the parent booking.
@@ -167,16 +173,18 @@ service cloud.firestore {
     }
 
     match /customers/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager()
+      allow read: if isSuperAdmin() || isBookingManager() || isSupportManager()
         || (authed() && request.auth.uid == docId);
       allow create: if isSuperAdmin() || (authed() && request.auth.uid == docId);
       allow update: if isSuperAdmin()
+        || isBookingManager()
+        || isSupportManager()
         || (authed() && request.auth.uid == docId && customerLocationPatchOnly());
       allow delete: if isSuperAdmin();
     }
 
     match /customers/{customerId}/locationHistory/{historyId} {
-      allow read: if isSuperAdmin() || isBookingManager()
+      allow read: if isSuperAdmin() || isBookingManager() || isSupportManager()
         || (authed() && request.auth.uid == customerId);
       allow create: if authed()
         && request.auth.uid == customerId
@@ -186,13 +194,13 @@ service cloud.firestore {
     }
 
     match /technicians/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager();
+      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager() || isSupportManager();
       allow write: if isSuperAdmin() || isTechnicianManager();
     }
 
     match /technicians/{techId}/busySlots/{slotId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager();
-      allow write: if isSuperAdmin() || isBookingManager() || isTechnicianManager();
+      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager() || isSupportManager();
+      allow write: if isSuperAdmin() || isBookingManager() || isTechnicianManager() || isSupportManager();
     }
 
     match /technicians/{techId}/transactions/{txId} {
@@ -202,14 +210,22 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /technicians/{techId}/payoutRequests/{id} {
+      allow create: if isTechnicianActor() && request.auth.uid == techId;
+      allow read: if isSuperAdmin() || isTechnicianManager()
+        || (isTechnicianActor() && request.auth.uid == techId);
+      allow update: if isSuperAdmin() || isTechnicianManager();
+      allow delete: if false;
+    }
+
     match /bookings/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager()
+      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager() || isSupportManager()
         || technicianOwnsBookingData(resource.data)
         || customerOwnsBooking(resource.data);
       allow create: if isSuperAdmin() || isBookingManager()
         || (authed()
           && request.resource.data.customerId == request.auth.uid);
-      allow update: if isSuperAdmin() || isBookingManager()
+      allow update: if isSuperAdmin() || isBookingManager() || isSupportManager()
         || (technicianOwnsBookingData(resource.data)
             && request.resource.data.technicianId == resource.data.technicianId
             && request.resource.data.customerId == resource.data.customerId
@@ -222,20 +238,21 @@ service cloud.firestore {
             && request.resource.data.customerId == resource.data.customerId
             && (
               customerAddOnDecisionPatchOnly()
-              || customerPaymentConfirmPatchOnly()
+              || customerRatingPatchOnly()
               || customerRevisitParentPatchOnly()
               || customerInvoiceLinkPatchOnly()
             ));
       allow delete: if isSuperAdmin() || isBookingManager();
     }
 
+    // Customer catalog (app + website) — public read; writes stay admin-only.
     match /services/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
+      allow read: if true;
       allow write: if isSuperAdmin() || isServiceManager();
     }
 
     match /categories/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager() || isTechnicianActor();
+      allow read: if true;
       allow write: if isSuperAdmin() || isServiceManager();
     }
 
@@ -247,12 +264,19 @@ service cloud.firestore {
 
     // Queued by admin panel; Cloud Function sends FCM (admin SDK bypasses these rules).
     match /bookingNotificationOutbox/{docId} {
-      allow create: if isSuperAdmin() || isBookingManager();
-      allow read, update, delete: if false;
+      allow create: if isSuperAdmin() || isBookingManager() || isSupportManager();
+      allow read: if isSuperAdmin() || isBookingManager();
+      allow update, delete: if false;
+    }
+
+    // Admin broadcast queue (title/body/segment) for later processing by Cloud Function / ops.
+    match /broadcastNotifications/{docId} {
+      allow create, read: if isSuperAdmin() || isBookingManager();
+      allow update, delete: if isSuperAdmin();
     }
 
     match /faqs/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
+      allow read: if true;
       allow write: if isSuperAdmin() || isServiceManager();
     }
 
@@ -267,9 +291,66 @@ service cloud.firestore {
       allow write: if isSuperAdmin() || isServiceManager();
     }
 
-    match /coupons/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager();
+    // CMS home layout sections for user app + website
+    match /homeSections/{docId} {
+      allow read: if true;
       allow write: if isSuperAdmin() || isServiceManager();
+    }
+
+    match /coupons/{docId} {
+      // Admins manage coupons; authenticated customers may read active codes for checkout.
+      allow read: if isSuperAdmin() || isBookingManager() || isServiceManager()
+        || (authed() && (!('active' in resource.data) || resource.data.active != false));
+      allow write: if isSuperAdmin() || isServiceManager();
+      // Customers may record a redemption + bump usageCount atomically from the app.
+      allow update: if isSuperAdmin() || isServiceManager()
+        || (authed()
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['usageCount', 'updatedAt']));
+
+      match /couponRedemptions/{redemptionId} {
+        allow read: if isSuperAdmin() || isServiceManager() || isBookingManager()
+          || (authed() && resource.data.customerId == request.auth.uid);
+        allow create: if authed()
+          && request.resource.data.customerId == request.auth.uid
+          && request.resource.data.keys().hasAll(['customerId', 'redeemedAt']);
+        allow update, delete: if isSuperAdmin();
+      }
+    }
+
+    match /supportTickets/{ticketId} {
+      allow read: if isSuperAdmin() || isSupportManager()
+        || (authed() && resource.data.customerId == request.auth.uid);
+      allow create: if authed()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.keys().hasAll(['customerId', 'subject', 'status', 'createdAt']);
+      allow update: if isSuperAdmin() || isSupportManager()
+        || (authed()
+          && resource.data.customerId == request.auth.uid
+          && request.resource.data.customerId == resource.data.customerId);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /customers/{customerId}/notifications/{notifId} {
+      allow read: if isSuperAdmin() || isSupportManager()
+        || (authed() && request.auth.uid == customerId);
+      allow create: if isSuperAdmin() || isSupportManager()
+        || (authed() && request.auth.uid == customerId);
+      allow update: if isSuperAdmin() || isSupportManager()
+        || (authed() && request.auth.uid == customerId);
+      allow delete: if isSuperAdmin()
+        || (authed() && request.auth.uid == customerId);
+    }
+
+    match /userNotifications/{docId} {
+      allow read: if isSuperAdmin() || isSupportManager()
+        || (authed() && resource.data.userId == request.auth.uid);
+      allow create: if isSuperAdmin() || isSupportManager()
+        || (authed() && request.resource.data.userId == request.auth.uid);
+      allow update: if isSuperAdmin() || isSupportManager()
+        || (authed() && resource.data.userId == request.auth.uid);
+      allow delete: if isSuperAdmin()
+        || (authed() && resource.data.userId == request.auth.uid);
     }
 
     match /settings/{docId} {
@@ -281,7 +362,7 @@ service cloud.firestore {
     // Tax invoices — written only by Next.js Admin SDK API (Spark-safe).
     // Customers may read their own invoice metadata (incl. Cloudinary PDF URL). Technicians cannot.
     match /invoices/{invoiceId} {
-      allow read: if isSuperAdmin() || isBookingManager()
+      allow read: if isSuperAdmin() || isBookingManager() || isSupportManager()
         || (authed() && resource.data.customerId == request.auth.uid);
       allow create, update, delete: if false;
     }

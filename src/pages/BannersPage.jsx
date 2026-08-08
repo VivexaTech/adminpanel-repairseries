@@ -16,7 +16,16 @@ const emptyForm = () => ({
   redirectLink: '',
   displayOrder: 0,
   enabled: true,
+  startAt: '',
+  endAt: '',
 })
+
+const toDateTimeLocal = (ts) => {
+  const d = ts?.toDate?.() ? ts.toDate() : ts instanceof Date ? ts : ts ? new Date(ts) : null
+  if (!d || Number.isNaN(d.getTime())) return ''
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 
 export function BannersPage() {
   const { banners, loading, mutating, upsertBanner, deleteBanner } = useApp()
@@ -83,7 +92,7 @@ export function BannersPage() {
     <div className="space-y-4">
       <PageHeader
         title="Banner Management"
-        description="Dynamic section banners for the user app and website. Empty sections show a placeholder on clients."
+        description="Place banners on any app/website section — Home, Services, Bookings, Account, Cart, Search, Category, Service details, and home blocks (Categories, Popular, Coming Soon)."
         actions={
           <>
             <SearchInput value={search} onChange={setSearch} placeholder="Search banners…" />
@@ -164,6 +173,8 @@ export function BannersPage() {
                                 redirectLink: row.redirectLink || '',
                                 displayOrder: Number(row.displayOrder ?? 0),
                                 enabled,
+                                startAt: toDateTimeLocal(row.startAt),
+                                endAt: toDateTimeLocal(row.endAt),
                               })
                               setOpen(true)
                             }}
@@ -193,7 +204,7 @@ export function BannersPage() {
                 {!filtered.length ? (
                   <tr>
                     <td colSpan={6} className="px-4 py-10 text-center text-[var(--on-surface-variant)]">
-                      No banners yet. Add section banners for Home, Categories, Coming Soon, and more.
+                      No banners yet. Add banners for Home, Services, Bookings, Account, Categories, Coming Soon, and more.
                     </td>
                   </tr>
                 ) : null}
@@ -242,6 +253,22 @@ export function BannersPage() {
               placeholder="/services or https://…"
             />
           </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Start at (optional)">
+              <Input
+                type="datetime-local"
+                value={form.startAt || ''}
+                onChange={(e) => setForm((c) => ({ ...c, startAt: e.target.value }))}
+              />
+            </Field>
+            <Field label="End at (optional)">
+              <Input
+                type="datetime-local"
+                value={form.endAt || ''}
+                onChange={(e) => setForm((c) => ({ ...c, endAt: e.target.value }))}
+              />
+            </Field>
+          </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="rounded-2xl border border-dashed border-[var(--outline-variant)] p-4">

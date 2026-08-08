@@ -17,6 +17,7 @@ import { ServicesPage } from './pages/ServicesPage'
 import { TechniciansPage } from './pages/TechniciansPage'
 import { OffersPage } from './pages/OffersPage'
 import { BannersPage } from './pages/BannersPage'
+import { HomeSectionsPage } from './pages/HomeSectionsPage'
 import { PeakHoursPage } from './pages/PeakHoursPage'
 import { LocationHistoryPage } from './pages/LocationHistoryPage'
 import { PausedJobsPage } from './pages/PausedJobsPage'
@@ -25,6 +26,9 @@ import { CouponsPage } from './pages/CouponsPage'
 import { RevisitsPage } from './pages/RevisitsPage'
 import { InvoicesPage } from './pages/InvoicesPage'
 import { InvoiceSettingsPage } from './pages/InvoiceSettingsPage'
+import { NotificationsPage } from './pages/NotificationsPage'
+import { FinanceReportsPage } from './pages/FinanceReportsPage'
+import { ServiceAreasPage } from './pages/ServiceAreasPage'
 import { canAccessPath, getDefaultRoute } from './utils/rbac'
 
 function ProtectedRoute({ children }) {
@@ -147,6 +151,14 @@ function App() {
           }
         />
         <Route
+          path="/home-sections"
+          element={
+            <ProtectedRoute>
+              <HomeSectionsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/offers"
           element={
             <ProtectedRoute>
@@ -191,6 +203,30 @@ function App() {
           element={
             <ProtectedRoute>
               <CouponsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/notifications"
+          element={
+            <ProtectedRoute>
+              <NotificationsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/finance-reports"
+          element={
+            <ProtectedRoute>
+              <FinanceReportsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/service-areas"
+          element={
+            <ProtectedRoute>
+              <ServiceAreasPage />
             </ProtectedRoute>
           }
         />

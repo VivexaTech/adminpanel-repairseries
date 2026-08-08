@@ -22,6 +22,7 @@ import {
   DEFAULT_RANKING_PENALTIES,
   normalizeComingSoonCategory,
 } from '../constants/catalog'
+import { normalizeHomeSectionPayload } from '../constants/homeSections'
 import { DEFAULT_REVISIT_POLICY, normalizeRevisitPolicy } from '../constants/revisitPolicy'
 import { normalizeScoreRewards } from '../constants/rankingScores'
 import { auth, db, isFirebaseConfigured, secondaryAuth } from '../firebase/config'
@@ -99,23 +100,31 @@ function technicianDailyBookingCount(bookings, technicianId, dayKey, excludeBook
   }).length
 }
 
+/** Bookings grow quickly — sync a recent window only (newest by createdAt). */
+const BOOKINGS_SYNC_OPTIONS = {
+  orderByField: 'createdAt',
+  orderDirection: 'desc',
+  limit: 500,
+}
+
 const ROLE_BINDINGS = {
   [ROLES.SUPER_ADMIN]: [
     { key: 'customers', collectionName: 'customers' },
     { key: 'technicians', collectionName: 'technicians' },
-    { key: 'bookings', collectionName: 'bookings' },
+    { key: 'bookings', collectionName: 'bookings', options: BOOKINGS_SYNC_OPTIONS },
     { key: 'services', collectionName: 'services' },
     { key: 'additionalServices', collectionName: 'additionalServices' },
     { key: 'categories', collectionName: 'categories' },
     { key: 'faqs', collectionName: 'faqs' },
     { key: 'offers', collectionName: 'offers' },
     { key: 'banners', collectionName: 'banners' },
+    { key: 'homeSections', collectionName: 'homeSections' },
     { key: 'coupons', collectionName: 'coupons' },
     { key: 'adminUsers', collectionName: 'adminUsers' },
     { key: 'invoices', collectionName: 'invoices' },
   ],
   [ROLES.BOOKING_MANAGER]: [
-    { key: 'bookings', collectionName: 'bookings' },
+    { key: 'bookings', collectionName: 'bookings', options: BOOKINGS_SYNC_OPTIONS },
     { key: 'customers', collectionName: 'customers' },
     { key: 'technicians', collectionName: 'technicians' },
     { key: 'services', collectionName: 'services' },
@@ -124,7 +133,7 @@ const ROLE_BINDINGS = {
   ],
   [ROLES.TECHNICIAN_MANAGER]: [
     { key: 'technicians', collectionName: 'technicians' },
-    { key: 'bookings', collectionName: 'bookings' },
+    { key: 'bookings', collectionName: 'bookings', options: BOOKINGS_SYNC_OPTIONS },
     { key: 'categories', collectionName: 'categories' },
   ],
   [ROLES.SERVICE_MANAGER]: [
@@ -133,11 +142,12 @@ const ROLE_BINDINGS = {
     { key: 'categories', collectionName: 'categories' },
     { key: 'offers', collectionName: 'offers' },
     { key: 'banners', collectionName: 'banners' },
+    { key: 'homeSections', collectionName: 'homeSections' },
     { key: 'coupons', collectionName: 'coupons' },
     { key: 'faqs', collectionName: 'faqs' },
   ],
   supportManager: [
-    { key: 'bookings', collectionName: 'bookings' },
+    { key: 'bookings', collectionName: 'bookings', options: BOOKINGS_SYNC_OPTIONS },
     { key: 'customers', collectionName: 'customers' },
     { key: 'technicians', collectionName: 'technicians' },
     { key: 'services', collectionName: 'services' },
@@ -155,6 +165,7 @@ const EMPTY_DATA = {
   faqs: [],
   offers: [],
   banners: [],
+  homeSections: [],
   coupons: [],
   adminUsers: [],
   invoices: [],
@@ -170,6 +181,7 @@ const IDLE_LOADING = {
   faqs: false,
   offers: false,
   banners: false,
+  homeSections: false,
   coupons: false,
   adminUsers: false,
   invoices: false,
@@ -193,6 +205,7 @@ export function AppProvider({ children }) {
     faqs: true,
     offers: true,
     banners: true,
+    homeSections: true,
     coupons: true,
     adminUsers: true,
     invoices: true,
@@ -210,6 +223,7 @@ export function AppProvider({ children }) {
     faqs: [],
     offers: [],
     banners: [],
+    homeSections: [],
     coupons: [],
     adminUsers: [],
     invoices: [],
@@ -325,6 +339,7 @@ export function AppProvider({ children }) {
             globalPaymentQr: docRow.globalPaymentQr,
             googleReviewUrl: docRow.googleReviewUrl,
             homeReviews: Array.isArray(docRow.homeReviews) ? docRow.homeReviews : [],
+            serviceAreas: Array.isArray(docRow.serviceAreas) ? docRow.serviceAreas : [],
             updatedAt: docRow.updatedAt,
           })
         }
@@ -388,7 +403,7 @@ export function AppProvider({ children }) {
       return { ...nextLoading, platformSettings: current.platformSettings, rankingSettings: current.rankingSettings }
     })
 
-    const unsubscribers = bindings.map(({ key, collectionName }) =>
+    const unsubscribers = bindings.map(({ key, collectionName, options }) =>
       subscribeCollection(
         collectionName,
         (rows, changes) => {
@@ -431,8 +446,13 @@ export function AppProvider({ children }) {
         },
         () => {
           setLoading((current) => ({ ...current, [key]: false }))
-          toast.error(`Realtime sync failed for ${collectionName}.`)
+          toast.error(
+            collectionName === 'bookings'
+              ? 'Realtime sync failed for bookings (limited to newest 500 by createdAt).'
+              : `Realtime sync failed for ${collectionName}.`,
+          )
         },
+        options || {},
       ),
     )
 
@@ -737,9 +757,17 @@ export function AppProvider({ children }) {
     }
   }
 
-  const updateBookingStatus = async ({ bookingId, status }) => {
+  const updateBookingStatus = async ({
+    bookingId,
+    status,
+    cancelReason = '',
+    cancelledBy = 'admin',
+  }) => {
     const booking = data.bookings.find((b) => b.id === bookingId)
     const techId = booking?.technicianId ? String(booking.technicianId) : ''
+    const isCancel = status === 'Cancelled' || status === 'Canceled'
+    const isStart =
+      status === 'InProgress' || status === 'Started' || status === 'Pending'
 
     await withMutating('bookingStatus', async () => {
       if (status === 'Completed' && techId && db) {
@@ -747,6 +775,13 @@ export function AppProvider({ children }) {
         batch.update(doc(db, 'bookings', bookingId), { status, updatedAt: serverTimestamp() })
         applyTechnicianEarningToBatch(batch, techId, { ...booking, status: 'Completed' })
         await batch.commit()
+      } else if (isCancel) {
+        await updateDocFields('bookings', bookingId, {
+          status: 'Cancelled',
+          cancelReason: String(cancelReason || '').trim() || 'Cancelled by admin',
+          cancelledBy: String(cancelledBy || 'admin'),
+          cancelledAt: serverTimestamp(),
+        })
       } else {
         await updateDocFields('bookings', bookingId, { status })
       }
@@ -761,9 +796,11 @@ export function AppProvider({ children }) {
     const eventType =
       status === 'Completed'
         ? 'completed'
-        : status === 'Started' || status === 'Pending'
+        : isStart
           ? 'started'
-          : null
+          : isCancel
+            ? 'cancelled'
+            : null
     if (!eventType) return
     try {
       await enqueueBookingNotification({
@@ -776,6 +813,156 @@ export function AppProvider({ children }) {
       console.error('[FCM queue] status', err)
       toast.warning('Status saved; push notification could not be queued.')
     }
+  }
+
+  const unassignTechnician = async ({ bookingId }) => {
+    const booking = data.bookings.find((b) => b.id === bookingId)
+    if (!booking) throw new Error('Booking not found.')
+    const status = String(booking.status || '')
+    const unsafe = ['Started', 'InProgress', 'In Progress', 'Paused', 'Completed', 'Cancelled', 'Canceled'].includes(
+      status,
+    )
+    if (unsafe) {
+      throw new Error(`Cannot unassign while booking status is ${status || 'unknown'}.`)
+    }
+    const techId = booking.technicianId ? String(booking.technicianId) : ''
+    if (!techId) throw new Error('No technician assigned.')
+
+    await withMutating('bookingUnassign', async () => {
+      await releaseBusySlotsForBooking(techId, bookingId)
+      await updateDocFields('bookings', bookingId, {
+        technicianId: null,
+        status: 'New',
+        reservedSlotIndices: [],
+        availabilityEndsAt: deleteField(),
+        assignedAt: deleteField(),
+      })
+    })
+    toast.success('Technician unassigned.')
+  }
+
+  const rescheduleBooking = async ({ bookingId, scheduledAt }) => {
+    const booking = data.bookings.find((b) => b.id === bookingId)
+    if (!booking) throw new Error('Booking not found.')
+    const startDate = scheduledAt instanceof Date ? scheduledAt : new Date(scheduledAt)
+    if (Number.isNaN(startDate.getTime())) throw new Error('Invalid date/time.')
+
+    const duration = Number(booking.durationMinutes || 60)
+    const scheduling = normalizeSchedulingSettings(
+      (await fetchDoc('settings', 'scheduling')) || {},
+    )
+    const descriptors = getSlotDescriptorsForBookingWindow(
+      startDate,
+      duration + scheduling.travelBufferMinutes,
+    )
+    if (!descriptors.length) {
+      throw new Error('Booking time falls outside schedulable hourly slots (08:00–22:00 IST).')
+    }
+
+    const techId = booking.technicianId ? String(booking.technicianId) : ''
+    await withMutating('bookingReschedule', async () => {
+      if (techId) {
+        await releaseBusySlotsForBooking(techId, bookingId)
+        const v = await verifyBusySlotsFree(techId, descriptors, bookingId)
+        if (!v.ok) throw new Error(v.message || 'Technician is not available for the new slot.')
+      }
+      await updateDocFields('bookings', bookingId, {
+        scheduledAt: Timestamp.fromDate(startDate),
+        dateTime: startDate.toISOString(),
+        travelBufferMinutes: scheduling.travelBufferMinutes,
+        reservedSlotIndices: descriptors.map((slot) => slot.slotIndex),
+        serviceEndsAt: Timestamp.fromMillis(startDate.getTime() + duration * 60_000),
+        availabilityEndsAt: Timestamp.fromMillis(
+          startDate.getTime() + (duration + scheduling.travelBufferMinutes) * 60_000,
+        ),
+      })
+      if (techId) {
+        await reserveBusySlotsForBooking(techId, bookingId, descriptors, 'booking')
+      }
+    })
+    toast.success('Booking rescheduled.')
+    if (booking.customerId) {
+      try {
+        await enqueueBookingNotification({
+          customerId: booking.customerId,
+          bookingId,
+          eventType: 'rescheduled',
+          serviceName: booking.serviceName || '',
+        })
+      } catch (err) {
+        console.error('[FCM queue] reschedule', err)
+        toast.warning('Reschedule saved; push notification could not be queued.')
+      }
+    }
+  }
+
+  const updateBookingPayment = async ({ bookingId, paymentStatus, clearPaymentRequest = false }) => {
+    const booking = data.bookings.find((b) => b.id === bookingId)
+    if (!booking) throw new Error('Booking not found.')
+
+    const patch = {}
+    if (paymentStatus != null) {
+      const next = String(paymentStatus).trim().toLowerCase()
+      if (!['paid', 'unpaid', 'refunded', ''].includes(next)) {
+        throw new Error('Payment status must be paid, unpaid, refunded, or empty.')
+      }
+      if (next === '') patch.paymentStatus = deleteField()
+      else {
+        patch.paymentStatus = next
+        if (next === 'paid') patch.paidAt = serverTimestamp()
+      }
+    }
+    if (clearPaymentRequest) {
+      patch.paymentRequest = deleteField()
+    }
+    if (!Object.keys(patch).length) throw new Error('Nothing to update.')
+
+    await withMutating('bookingPayment', async () => {
+      await updateDocFields('bookings', bookingId, patch)
+    })
+    toast.success(
+      clearPaymentRequest && paymentStatus == null
+        ? 'Payment request cleared.'
+        : 'Payment status updated.',
+    )
+  }
+
+  const updateBookingRevisitRemaining = async ({ bookingId, remaining }) => {
+    const booking = data.bookings.find((b) => b.id === bookingId)
+    if (!booking) throw new Error('Booking not found.')
+    const n = Math.max(0, Math.round(Number(remaining)))
+    if (!Number.isFinite(n)) throw new Error('Remaining revisits must be a number ≥ 0.')
+
+    await withMutating('bookingRevisitRemaining', async () => {
+      await updateDocFields('bookings', bookingId, {
+        revisitRemaining: n,
+        remainingRevisits: n,
+        freeRevisitsRemaining: n,
+      })
+    })
+    toast.success('Revisit remaining updated.')
+  }
+
+  const addCustomerSupportNote = async ({ customerId, text }) => {
+    const noteText = String(text || '').trim()
+    if (!noteText) throw new Error('Note text is required.')
+    const customer = data.customers.find((c) => c.id === customerId)
+    if (!customer) throw new Error('Customer not found.')
+
+    const prev = Array.isArray(customer.supportNotes) ? customer.supportNotes : []
+    const entry = {
+      text: noteText,
+      createdAt: new Date().toISOString(),
+      adminName: String(session?.name || session?.email || 'Admin'),
+      adminId: session?.id || null,
+    }
+
+    await withMutating('customerSupportNote', async () => {
+      await updateDocFields('customers', customerId, {
+        supportNotes: [...prev, entry],
+      })
+    })
+    toast.success('Support note added.')
   }
 
   const recordTechnicianPayout = async ({ technicianId, amount, paymentMode, note, maxAmount }) => {
@@ -1365,6 +1552,19 @@ export function AppProvider({ children }) {
     const redirectLink = String(banner.redirectLink || '').trim()
     const displayOrder = Number(banner.displayOrder)
     const enabled = banner.enabled !== false && banner.active !== false
+
+    const parseOptionalDate = (raw) => {
+      if (raw === '' || raw == null) return null
+      const d = raw instanceof Date ? raw : new Date(raw)
+      if (Number.isNaN(d.getTime())) throw new Error('Invalid schedule date.')
+      return d
+    }
+    const startAtDate = parseOptionalDate(banner.startAt)
+    const endAtDate = parseOptionalDate(banner.endAt)
+    if (startAtDate && endAtDate && endAtDate.getTime() < startAtDate.getTime()) {
+      throw new Error('Banner end date must be after start date.')
+    }
+
     await withMutating('banner', async () => {
       const payload = {
         title,
@@ -1377,6 +1577,10 @@ export function AppProvider({ children }) {
         enabled,
         active: enabled,
       }
+      if (startAtDate) payload.startAt = Timestamp.fromDate(startAtDate)
+      else if (banner.id) payload.startAt = deleteField()
+      if (endAtDate) payload.endAt = Timestamp.fromDate(endAtDate)
+      else if (banner.id) payload.endAt = deleteField()
       if (banner.id) await upsertDoc('banners', banner.id, payload)
       else await createDoc('banners', payload)
     })
@@ -1389,6 +1593,41 @@ export function AppProvider({ children }) {
     }
     await withMutating('bannerDelete', async () => removeDoc('banners', bannerId))
     toast.success('Banner removed.')
+  }
+
+  const upsertHomeSection = async (section) => {
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to manage home sections.')
+    }
+    const payload = normalizeHomeSectionPayload(section)
+    await withMutating('homeSection', async () => {
+      if (section.id) await upsertDoc('homeSections', section.id, payload)
+      else await createDoc('homeSections', payload)
+    })
+    toast.success('Home section saved.')
+  }
+
+  const deleteHomeSection = async (sectionId) => {
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to manage home sections.')
+    }
+    await withMutating('homeSectionDelete', async () => removeDoc('homeSections', sectionId))
+    toast.success('Home section removed.')
+  }
+
+  const seedDefaultHomeSections = async (sections) => {
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to manage home sections.')
+    }
+    const list = Array.isArray(sections) ? sections : []
+    if (!list.length) throw new Error('No default sections to seed.')
+    await withMutating('homeSectionSeed', async () => {
+      for (const row of list) {
+        const payload = normalizeHomeSectionPayload(row)
+        await createDoc('homeSections', payload)
+      }
+    })
+    toast.success(`Added ${list.length} default home sections.`)
   }
 
   const updateRankingSettings = async (patch) => {
@@ -1424,15 +1663,33 @@ export function AppProvider({ children }) {
         blockOfflineDuringPeak: patch.blockOfflineDuringPeak !== false,
         peakHourSlotStart: Number(patch.peakHourSlotStart ?? 1),
         peakHourSlotEnd: Number(patch.peakHourSlotEnd ?? 3),
-        peakHoursTarget: Number(patch.peakHoursTarget ?? 4),
+        peakHoursTarget: Number(patch.peakHoursTarget ?? patch?.peakHoursTargets?.silver ?? 34),
         weekendHoursTarget: Number(patch.weekendHoursTarget ?? 8),
+        revisitFreeLimit: Number(patch.revisitFreeLimit ?? 20),
+        revisitPctTargets: {
+          gold: Number(patch?.revisitPctTargets?.gold ?? 6),
+          silver: Number(patch?.revisitPctTargets?.silver ?? 8),
+          bronze: Number(patch?.revisitPctTargets?.bronze ?? 10),
+        },
+        jobsTargets: {
+          gold: Number(patch?.jobsTargets?.gold ?? 20),
+          silver: Number(patch?.jobsTargets?.silver ?? 24),
+          bronze: Number(patch?.jobsTargets?.bronze ?? 30),
+        },
+        peakHoursTargets: {
+          gold: Number(patch?.peakHoursTargets?.gold ?? 30),
+          silver: Number(patch?.peakHoursTargets?.silver ?? 34),
+          bronze: Number(patch?.peakHoursTargets?.bronze ?? 38),
+        },
       })
     })
     toast.success('Peak hour & scoring settings saved.')
   }
 
   const upsertCoupon = async (coupon) => {
-    if (session?.role !== ROLES.SUPER_ADMIN) throw new Error('Only Super Admins can manage coupons.')
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to manage coupons.')
+    }
     const code = String(coupon.code || '')
       .trim()
       .toUpperCase()
@@ -1457,16 +1714,66 @@ export function AppProvider({ children }) {
 
     const active = Boolean(coupon.active)
 
+    const usageLimitRaw = coupon.usageLimit
+    const usageLimit =
+      usageLimitRaw === '' || usageLimitRaw == null ? null : Number(usageLimitRaw)
+    if (usageLimit != null && (!Number.isFinite(usageLimit) || usageLimit < 0)) {
+      throw new Error('Usage limit must be empty or ≥ 0.')
+    }
+
+    const perUserLimitRaw = coupon.perUserLimit
+    const perUserLimit =
+      perUserLimitRaw === '' || perUserLimitRaw == null ? null : Number(perUserLimitRaw)
+    if (perUserLimit != null && (!Number.isFinite(perUserLimit) || perUserLimit < 1)) {
+      throw new Error('Per-user limit must be empty or ≥ 1.')
+    }
+
+    const firstOrderOnly = Boolean(coupon.firstOrderOnly)
+
+    const normalizeIdList = (raw) => {
+      if (!Array.isArray(raw)) return []
+      return [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))]
+    }
+    const categoryIds = normalizeIdList(coupon.categoryIds)
+    const serviceIds = normalizeIdList(coupon.serviceIds)
+
+    const existing = coupon.id ? data.coupons.find((c) => c.id === coupon.id) : null
+    const usageCountRaw = Number(existing?.usageCount ?? coupon.usageCount ?? 0)
+    const usageCount = Number.isFinite(usageCountRaw) && usageCountRaw >= 0 ? usageCountRaw : 0
+
+    const expiryTs = Timestamp.fromDate(expiryDate)
+
     await withMutating('coupon', async () => {
       const payload = {
         code,
         discountType,
         discountValue,
+        // App-compatible fields (repair-series couponService reads these)
+        value: discountValue,
         minOrderAmount,
-        ...(maxDiscount != null ? { maxDiscount } : {}),
-        expiryDate: Timestamp.fromDate(expiryDate),
+        expiryDate: expiryTs,
+        expiresAt: expiryTs,
         active,
+        usageCount,
+        firstOrderOnly,
       }
+      if (discountType === 'percentage') {
+        payload.discountPercent = discountValue
+        if (coupon.id) payload.discountFlat = deleteField()
+      } else {
+        payload.discountFlat = discountValue
+        if (coupon.id) payload.discountPercent = deleteField()
+      }
+      if (maxDiscount != null) payload.maxDiscount = maxDiscount
+      else if (coupon.id) payload.maxDiscount = deleteField()
+      if (usageLimit != null) payload.usageLimit = usageLimit
+      else if (coupon.id) payload.usageLimit = deleteField()
+      if (perUserLimit != null) payload.perUserLimit = perUserLimit
+      else if (coupon.id) payload.perUserLimit = deleteField()
+      // Empty arrays = no restriction (backward compatible with coupons that omit these fields)
+      payload.categoryIds = categoryIds
+      payload.serviceIds = serviceIds
+
       if (coupon.id) await upsertDoc('coupons', coupon.id, payload)
       else await createDoc('coupons', payload)
     })
@@ -1474,7 +1781,9 @@ export function AppProvider({ children }) {
   }
 
   const deleteCoupon = async (couponId) => {
-    if (session?.role !== ROLES.SUPER_ADMIN) throw new Error('Only Super Admins can manage coupons.')
+    if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
+      throw new Error('You are not allowed to manage coupons.')
+    }
     await withMutating('couponDelete', async () => removeDoc('coupons', couponId))
     toast.success('Coupon removed.')
   }
@@ -1498,6 +1807,90 @@ export function AppProvider({ children }) {
       await updateDocFields('bookings', bookingId, { addOnServices: raw, ...financePatch })
     })
     toast.success('Add-on status updated.')
+  }
+
+  /**
+   * Resolve technician-app extrasApprovalRequest (different schema from addOnApprovalRequest).
+   */
+  const resolveExtrasApprovalRequest = async ({ bookingId, approve }) => {
+    let notifyCustomerId = ''
+    let notifyServiceName = ''
+    await withMutating('bookingApprovalRequest', async () => {
+      const booking = data.bookings.find((b) => b.id === bookingId)
+      if (!booking) throw new Error('Booking not found.')
+      notifyCustomerId = String(booking.customerId || '')
+      notifyServiceName = String(booking.serviceName || '')
+      const req = booking.extrasApprovalRequest
+      if (!req || String(req.status || '').toLowerCase() !== 'pending') {
+        throw new Error('No pending extras approval from technician.')
+      }
+      if (approve) {
+        const proposed = Array.isArray(req.proposedAddOnServices)
+          ? req.proposedAddOnServices
+          : Array.isArray(req.proposed_add_on_services)
+            ? req.proposed_add_on_services
+            : []
+        const additional = Array.isArray(req.proposedAdditionalServices)
+          ? req.proposedAdditionalServices
+          : Array.isArray(req.proposed_additional_services)
+            ? req.proposed_additional_services
+            : []
+        const rows = [
+          ...proposed.map((x) => ({
+            serviceId: x.serviceId || '',
+            serviceName: String(x.serviceName || x.name || 'Extra').trim(),
+            price: Number(x.price) || 0,
+            serviceType: 'extra',
+            approvalStatus: 'approved',
+          })),
+          ...additional.map((x) => ({
+            serviceId: x.additionalServiceId || x.serviceId || '',
+            serviceName: String(x.title || x.serviceName || x.name || 'Additional').trim(),
+            price: Number(x.price) || 0,
+            serviceType: 'additional',
+            approvalStatus: 'approved',
+          })),
+        ].filter((r) => r.serviceName && Number.isFinite(r.price))
+        const existing = Array.isArray(booking.addOnServices) ? booking.addOnServices : []
+        const raw = [...existing, ...rows]
+        const merged = { ...booking, addOnServices: raw }
+        const financePatch = buildFinanceWritePatch(merged)
+        const replacement = req.replacementService
+        const patch = {
+          addOnServices: raw,
+          extrasApprovalRequest: deleteField(),
+          ...financePatch,
+        }
+        if (replacement && Number(replacement.price) > 0) {
+          patch.serviceId = replacement.serviceId || booking.serviceId
+          patch.serviceName = replacement.serviceName || booking.serviceName
+          patch.amount = Number(replacement.price)
+          patch.baseAmount = Number(replacement.price)
+        }
+        await updateDocFields('bookings', bookingId, patch)
+      } else {
+        await updateDocFields('bookings', bookingId, {
+          extrasApprovalRequest: {
+            ...(typeof req === 'object' ? req : {}),
+            status: 'rejected',
+            resolvedAt: serverTimestamp(),
+          },
+        })
+      }
+    })
+    toast.success(approve ? 'Technician extras approved.' : 'Technician extras rejected.')
+    if (notifyCustomerId) {
+      try {
+        await enqueueBookingNotification({
+          customerId: notifyCustomerId,
+          bookingId,
+          eventType: approve ? 'add_on_approved' : 'add_on_rejected',
+          serviceName: notifyServiceName,
+        })
+      } catch (err) {
+        console.error('[FCM queue] extras approval', err)
+      }
+    }
   }
 
   const resolveAddOnApprovalRequest = async ({ bookingId, requestId, approve }) => {
@@ -1709,6 +2102,47 @@ export function AppProvider({ children }) {
     toast.success('Global payment settings saved.')
   }
 
+  const updateServiceAreas = async (areas) => {
+    if (session?.role !== ROLES.SUPER_ADMIN) {
+      throw new Error('Only Super Admins can manage service areas.')
+    }
+    if (!isFirebaseConfigured || !db) throw new Error('Firebase is not configured.')
+    const list = Array.isArray(areas) ? areas : []
+    const normalized = list
+      .map((row, index) => {
+        const name = String(row?.name || '').trim()
+        const slug =
+          String(row?.slug || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-|-$/g, '') ||
+          name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-|-$/g, '')
+        const pincodePrefixes = Array.isArray(row?.pincodePrefixes)
+          ? [...new Set(row.pincodePrefixes.map((p) => String(p || '').trim()).filter(Boolean))]
+          : String(row?.pincodePrefixesText || '')
+              .split(/[\s,]+/)
+              .map((p) => p.trim())
+              .filter(Boolean)
+        return {
+          id: String(row?.id || slug || `area-${index + 1}`),
+          name,
+          slug,
+          active: row?.active !== false,
+          pincodePrefixes,
+        }
+      })
+      .filter((row) => row.name && row.slug)
+    await withMutating('serviceAreas', async () => {
+      await upsertDoc('settings', 'general', { serviceAreas: normalized })
+    })
+    toast.success('Service areas saved.')
+    return normalized
+  }
+
   const importServicesFromCsv = async (rows, options = {}) => {
     const { onProgress } = options
     if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
@@ -1838,6 +2272,11 @@ export function AppProvider({ children }) {
     createCustomer,
     updateCustomerDetails,
     assignTechnician,
+    unassignTechnician,
+    rescheduleBooking,
+    updateBookingPayment,
+    updateBookingRevisitRemaining,
+    addCustomerSupportNote,
     approveTechnician,
     rejectTechnician,
     suspendTechnician,
@@ -1847,6 +2286,7 @@ export function AppProvider({ children }) {
     createBooking,
     updateBookingAddOnApproval,
     resolveAddOnApprovalRequest,
+    resolveExtrasApprovalRequest,
     backfillMissingBookingCoordinates,
     upsertService,
     deleteService,
@@ -1858,12 +2298,16 @@ export function AppProvider({ children }) {
     deleteOffer,
     upsertBanner,
     deleteBanner,
+    upsertHomeSection,
+    deleteHomeSection,
+    seedDefaultHomeSections,
     rankingSettings,
     updateRankingSettings,
     upsertCoupon,
     deleteCoupon,
     updatePlatformGeneral,
     updateGlobalPaymentSettings,
+    updateServiceAreas,
     importServicesFromCsv,
     importAdditionalServicesFromCsv,
     upsertAdditionalService,

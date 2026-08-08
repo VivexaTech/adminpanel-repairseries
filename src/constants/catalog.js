@@ -1,20 +1,30 @@
-﻿/** Section keys for dynamic banners (user app + website). */
+﻿/** Section keys for dynamic banners (user app + website). Keep in sync with clients. */
 export const BANNER_SECTIONS = [
+  // App / website navigation & screens
   { value: 'home', label: 'Home' },
+  { value: 'offers', label: 'Offers' },
+  { value: 'services', label: 'Services' },
+  { value: 'bookings', label: 'Bookings' },
+  { value: 'account', label: 'Account' },
+  { value: 'cart', label: 'Cart' },
+  { value: 'search', label: 'Search' },
+  { value: 'category', label: 'Category page' },
+  { value: 'service_details', label: 'Service details' },
+
+  // Home page blocks (app + mobile website)
   { value: 'popular_services', label: 'Popular Services' },
   { value: 'featured', label: 'Featured Services' },
-  { value: 'categories', label: 'Categories' },
+  { value: 'categories', label: 'Categories (home)' },
+  { value: 'coming_soon', label: 'Coming Soon' },
+  { value: 'coming_soon_main', label: 'Coming Soon — Main' },
+  { value: 'coming_soon_commercial', label: 'Coming Soon — Commercial' },
+
+  // Category-themed placements (optional marketing)
   { value: 'ac', label: 'AC' },
   { value: 'washing_machine', label: 'Washing Machine' },
   { value: 'kitchen_appliances', label: 'Kitchen Appliances' },
   { value: 'cleaning', label: 'Cleaning' },
-  { value: 'coming_soon', label: 'Coming Soon' },
-  { value: 'coming_soon_main', label: 'Coming Soon — Main' },
-  { value: 'coming_soon_commercial', label: 'Coming Soon — Commercial' },
   { value: 'commercial', label: 'Commercial' },
-  { value: 'offers', label: 'Offers' },
-  { value: 'search', label: 'Search' },
-  { value: 'cart', label: 'Cart' },
 ]
 
 export const BANNER_SECTION_LABELS = Object.fromEntries(

@@ -30,18 +30,33 @@ export const ASSIGNABLE_ROLES = [
 export function canAccessPath(role, pathname) {
   if (!role) return false
   const normalized = (pathname || '/').replace(/\/$/, '') || '/'
-  if (normalized === '/platform-settings' || normalized === '/invoice-settings') {
+  if (
+    normalized === '/platform-settings' ||
+    normalized === '/invoice-settings' ||
+    normalized === '/finance-reports' ||
+    normalized === '/service-areas'
+  ) {
     return role === ROLES.SUPER_ADMIN
+  }
+  if (normalized === '/notifications') {
+    return role === ROLES.SUPER_ADMIN || role === ROLES.BOOKING_MANAGER
   }
   if (role === ROLES.SUPER_ADMIN) return true
   if (role === ROLES.TECHNICIAN_MANAGER) {
     return ['/technicians', '/peak-hours', '/paused-jobs', '/scheduling-settings'].includes(normalized)
   }
   if (role === ROLES.BOOKING_MANAGER) {
-    return ['/bookings', '/paused-jobs', '/location-history', '/revisits', '/invoices'].includes(normalized)
+    return [
+      '/bookings',
+      '/paused-jobs',
+      '/location-history',
+      '/revisits',
+      '/invoices',
+      '/notifications',
+    ].includes(normalized)
   }
   if (role === ROLES.SERVICE_MANAGER) {
-    return ['/services', '/coming-soon-services', '/additional-services', '/import-services', '/offers', '/banners', '/coupons'].includes(normalized)
+    return ['/services', '/coming-soon-services', '/additional-services', '/import-services', '/offers', '/banners', '/home-sections', '/coupons'].includes(normalized)
   }
   if (role === 'supportManager') {
     return ['/bookings', '/customers', '/paused-jobs', '/location-history', '/revisits'].includes(normalized)

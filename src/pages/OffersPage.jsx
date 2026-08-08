@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Badge } from '../components/ui'
 import { uploadToCloudinary } from '../services/cloudinary'
@@ -40,8 +41,8 @@ export function OffersPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Special Offers"
-        description="Create banners for the user app home screen."
+        title="Special Offers (legacy)"
+        description="Legacy home-screen offer images. Prefer Banner Management for new placements."
         actions={
           <>
             <SearchInput value={search} onChange={setSearch} placeholder="Search offers..." />
@@ -49,6 +50,26 @@ export function OffersPage() {
           </>
         }
       />
+
+      <Card className="border border-[var(--primary)]/30 bg-[color-mix(in_srgb,var(--primary)_8%,transparent)] p-4 sm:p-5">
+        <p className="text-sm font-medium text-[var(--on-surface)]">Offers is legacy</p>
+        <p className="mt-1 text-sm text-[var(--on-surface-variant)]">
+          New promotional creatives should use{' '}
+          <Link to="/banners" className="font-medium text-[var(--primary)] underline-offset-2 hover:underline">
+            Banners
+          </Link>{' '}
+          (section targeting for Home, Services, Cart, etc.). This Offers page remains for existing data only and
+          is not deleted.
+        </p>
+        <div className="mt-3">
+          <Link
+            to="/banners"
+            className="inline-flex items-center justify-center rounded-2xl bg-[var(--secondary)] px-4 py-2.5 text-sm font-medium text-[var(--surface-lowest)] transition hover:opacity-90"
+          >
+            Go to Banners
+          </Link>
+        </div>
+      </Card>
 
       <div className="grid gap-4 xl:grid-cols-2">
         {loading.offers ? (
@@ -89,7 +110,10 @@ export function OffersPage() {
                   variant="danger"
                   type="button"
                   disabled={Boolean(mutating.offerDelete)}
-                  onClick={() => deleteOffer(offer.id)}
+                  onClick={() => {
+                    if (!window.confirm('Delete this offer?')) return
+                    void deleteOffer(offer.id)
+                  }}
                 >
                   Delete
                 </Button>

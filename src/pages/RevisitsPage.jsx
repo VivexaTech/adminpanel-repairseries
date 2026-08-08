@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Badge, Card, Field, Modal, PageHeader, SearchInput, Select } from '../components/ui'
+import { toast } from 'sonner'
+import { Badge, Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select } from '../components/ui'
 import { useApp } from '../context/useApp'
 import { formatDateTime } from '../utils/helpers'
 
@@ -42,10 +43,11 @@ function remainingRevisitsLabel(booking) {
 }
 
 export function RevisitsPage() {
-  const { bookings, customers, loading } = useApp()
+  const { bookings, customers, loading, mutating, updateBookingRevisitRemaining } = useApp()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [selected, setSelected] = useState(null)
+  const [remainingInput, setRemainingInput] = useState('')
 
   const customerMap = useMemo(
     () => Object.fromEntries((customers || []).map((c) => [c.id, c])),
@@ -166,7 +168,10 @@ export function RevisitsPage() {
                 <button
                   type="button"
                   className="rounded-2xl border border-[var(--outline-variant)] px-4 py-2 text-sm font-medium text-[var(--on-surface)] hover:bg-[var(--surface-lowest)]"
-                  onClick={() => setSelected(booking)}
+                  onClick={() => {
+                    setSelected(booking)
+                    setRemainingInput(remainingRevisitsLabel(booking) ?? '')
+                  }}
                 >
                   View details
                 </button>
@@ -224,7 +229,10 @@ export function RevisitsPage() {
       <Modal
         open={Boolean(selected)}
         title={selected ? `Revisit ${selected.bookingCode || selected.id}` : 'Revisit'}
-        onClose={() => setSelected(null)}
+        onClose={() => {
+          setSelected(null)
+          setRemainingInput('')
+        }}
         className="max-w-3xl"
       >
         {selected ? (
@@ -252,6 +260,49 @@ export function RevisitsPage() {
               <p>
                 <span className="text-[var(--on-surface-variant)]">Remaining:</span>{' '}
                 {remainingRevisitsLabel(selected) ?? '—'}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-[var(--outline-variant)] p-3">
+              <Field label="Adjust remaining free revisits">
+                <div className="flex flex-wrap items-end gap-2">
+                  <Input
+                    type="number"
+                    min="0"
+                    className="max-w-[140px]"
+                    value={remainingInput}
+                    onChange={(e) => setRemainingInput(e.target.value)}
+                  />
+                  <Button
+                    type="button"
+                    disabled={Boolean(mutating.bookingRevisitRemaining)}
+                    onClick={async () => {
+                      try {
+                        await updateBookingRevisitRemaining({
+                          bookingId: selected.id,
+                          remaining: remainingInput,
+                        })
+                        setSelected((cur) =>
+                          cur
+                            ? {
+                                ...cur,
+                                revisitRemaining: Math.max(0, Math.round(Number(remainingInput))),
+                                remainingRevisits: Math.max(0, Math.round(Number(remainingInput))),
+                                freeRevisitsRemaining: Math.max(0, Math.round(Number(remainingInput))),
+                              }
+                            : cur,
+                        )
+                      } catch (e) {
+                        toast.error(e.message)
+                      }
+                    }}
+                  >
+                    {mutating.bookingRevisitRemaining ? 'Saving…' : 'Save'}
+                  </Button>
+                </div>
+              </Field>
+              <p className="mt-2 text-xs text-[var(--on-surface-variant)]">
+                Syncs <code>revisitRemaining</code>, <code>remainingRevisits</code>, and{' '}
+                <code>freeRevisitsRemaining</code>.
               </p>
             </div>
             {selected.revisitNotes ? (

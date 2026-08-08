@@ -6,9 +6,20 @@ import { exportRows } from '../services/csv'
 import { bookingAddressSearchText, formatBookingAddressForDisplay } from '../utils/bookingAddress'
 
 export function CustomersPage() {
-  const { customers, session, toggleCustomerBlock, deleteCustomer, createCustomer, updateCustomerDetails, loading, mutating } = useApp()
+  const {
+    customers,
+    session,
+    toggleCustomerBlock,
+    deleteCustomer,
+    createCustomer,
+    updateCustomerDetails,
+    addCustomerSupportNote,
+    loading,
+    mutating,
+  } = useApp()
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState(null)
+  const [noteText, setNoteText] = useState('')
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState({ name: '', phone: '', email: '', address: '' })
   const [editOpen, setEditOpen] = useState(false)
@@ -36,6 +47,7 @@ export function CustomersPage() {
   }
 
   const canEdit = session?.role === 'superAdmin'
+  const canDelete = session?.role === 'superAdmin'
 
   const submit = async (event) => {
     event.preventDefault()
@@ -142,7 +154,14 @@ export function CustomersPage() {
               </div>
 
               <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                <Button variant="ghost" className="w-full" onClick={() => setSelected(customer)}>
+                <Button
+                  variant="ghost"
+                  className="w-full"
+                  onClick={() => {
+                    setSelected(customer)
+                    setNoteText('')
+                  }}
+                >
                   View
                 </Button>
                 {canEdit ? (
@@ -172,14 +191,16 @@ export function CustomersPage() {
                 >
                   {customer.blocked ? 'Unblock' : 'Block'}
                 </Button>
-                <Button
-                  variant="danger"
-                  className="w-full"
-                  onClick={() => deleteCustomer(customer.id)}
-                  disabled={Boolean(mutating.customerDelete)}
-                >
-                  Delete
-                </Button>
+                {canDelete ? (
+                  <Button
+                    variant="danger"
+                    className="w-full"
+                    onClick={() => deleteCustomer(customer.id)}
+                    disabled={Boolean(mutating.customerDelete)}
+                  >
+                    Delete
+                  </Button>
+                ) : null}
               </div>
             </div>
           ))}
@@ -240,13 +261,15 @@ export function CustomersPage() {
                       >
                         {customer.blocked ? 'Unblock' : 'Block'}
                       </Button>
-                      <Button
-                        variant="danger"
-                        onClick={() => deleteCustomer(customer.id)}
-                        disabled={Boolean(mutating.customerDelete)}
-                      >
-                        Delete
-                      </Button>
+                      {canDelete ? (
+                        <Button
+                          variant="danger"
+                          onClick={() => deleteCustomer(customer.id)}
+                          disabled={Boolean(mutating.customerDelete)}
+                        >
+                          Delete
+                        </Button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -256,15 +279,92 @@ export function CustomersPage() {
         </div>
       </Card>
 
-      <Modal open={Boolean(selected)} title="Customer Details" onClose={() => setSelected(null)}>
+      <Modal
+        open={Boolean(selected)}
+        title="Customer Details"
+        onClose={() => {
+          setSelected(null)
+          setNoteText('')
+        }}
+        className="max-w-3xl"
+      >
         {selected ? (
-          <div className="grid gap-4 md:grid-cols-2">
-            {Object.entries(selected).map(([key, value]) => (
-              <div key={key} className="rounded-2xl border border-[var(--border)] bg-[var(--surface-lowest)] p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-[var(--on-surface-variant)]">{key}</p>
-                <p className="mt-2 break-words text-sm text-[var(--on-surface)]">{String(value)}</p>
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              {Object.entries(selected)
+                .filter(([key]) => key !== 'supportNotes')
+                .map(([key, value]) => (
+                  <div key={key} className="rounded-2xl border border-[var(--border)] bg-[var(--surface-lowest)] p-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-[var(--on-surface-variant)]">{key}</p>
+                    <p className="mt-2 break-words text-sm text-[var(--on-surface)]">{String(value)}</p>
+                  </div>
+                ))}
+            </div>
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-lowest)] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-[var(--on-surface-variant)]">Support notes</p>
+              <ul className="mt-3 space-y-2">
+                {(Array.isArray(selected.supportNotes) ? selected.supportNotes : []).length ? (
+                  [...selected.supportNotes]
+                    .slice()
+                    .reverse()
+                    .map((note, idx) => (
+                      <li
+                        key={`${note?.createdAt || idx}-${idx}`}
+                        className="rounded-xl border border-[var(--outline-variant)] px-3 py-2 text-sm"
+                      >
+                        <p className="text-[var(--on-surface)]">{note?.text || '—'}</p>
+                        <p className="mt-1 text-xs text-[var(--on-surface-variant)]">
+                          {note?.adminName || 'Admin'}
+                          {note?.createdAt
+                            ? ` · ${new Date(note.createdAt).toLocaleString()}`
+                            : ''}
+                        </p>
+                      </li>
+                    ))
+                ) : (
+                  <li className="text-sm text-[var(--on-surface-variant)]">No notes yet.</li>
+                )}
+              </ul>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+                <div className="flex-1">
+                  <Field label="Add note">
+                    <Input
+                      value={noteText}
+                      onChange={(e) => setNoteText(e.target.value)}
+                      placeholder="Follow-up, complaint, preference…"
+                    />
+                  </Field>
+                </div>
+                <Button
+                  type="button"
+                  disabled={Boolean(mutating.customerSupportNote)}
+                  onClick={async () => {
+                    try {
+                      await addCustomerSupportNote({ customerId: selected.id, text: noteText })
+                      const entry = {
+                        text: noteText.trim(),
+                        createdAt: new Date().toISOString(),
+                        adminName: session?.name || session?.email || 'Admin',
+                        adminId: session?.id || null,
+                      }
+                      setSelected((cur) =>
+                        cur
+                          ? {
+                              ...cur,
+                              supportNotes: [...(Array.isArray(cur.supportNotes) ? cur.supportNotes : []), entry],
+                            }
+                          : cur,
+                      )
+                      setNoteText('')
+                    } catch (error) {
+                      toast.error(error.message)
+                    }
+                  }}
+                >
+                  {mutating.customerSupportNote ? 'Saving…' : 'Add note'}
+                </Button>
               </div>
-            ))}
+            </div>
           </div>
         ) : null}
       </Modal>

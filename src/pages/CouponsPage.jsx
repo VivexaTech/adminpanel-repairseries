@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Textarea, Badge } from '../components/ui'
+import { Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select, Badge } from '../components/ui'
 import { useApp } from '../context/useApp'
 
 const initialCoupon = {
@@ -11,6 +11,11 @@ const initialCoupon = {
   minOrderAmount: '',
   maxDiscount: '',
   expiryDate: '',
+  usageLimit: '',
+  perUserLimit: '',
+  firstOrderOnly: false,
+  categoryIds: [],
+  serviceIds: [],
   active: true,
 }
 
@@ -21,11 +26,44 @@ const toDateTimeLocal = (ts) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+function couponDiscountLabel(c) {
+  const type = c.discountType === 'percentage' ? 'percentage' : 'flat'
+  const value =
+    type === 'percentage'
+      ? Number(c.discountPercent ?? c.discountValue ?? c.value ?? 0)
+      : Number(c.discountFlat ?? c.discountValue ?? c.value ?? 0)
+  return type === 'percentage' ? `${value}%` : `₹${value}`
+}
+
+function toggleId(list, id) {
+  const next = new Set(list || [])
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  return [...next]
+}
+
 export function CouponsPage() {
-  const { coupons, loading, mutating, upsertCoupon, deleteCoupon } = useApp()
+  const { coupons, categories, services, loading, mutating, upsertCoupon, deleteCoupon } = useApp()
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState(initialCoupon)
+
+  const categoryOptions = useMemo(
+    () =>
+      (categories || [])
+        .map((c) => ({ id: c.id, label: c.name || c.title || c.id }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [categories],
+  )
+
+  const serviceOptions = useMemo(
+    () =>
+      (services || [])
+        .filter((s) => !s.comingSoon)
+        .map((s) => ({ id: s.id, label: s.name || s.title || s.id }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [services],
+  )
 
   const filtered = useMemo(
     () =>
@@ -34,8 +72,14 @@ export function CouponsPage() {
           c.code,
           c.discountType,
           c.discountValue,
+          c.discountPercent,
+          c.discountFlat,
           c.minOrderAmount,
           c.maxDiscount,
+          c.usageLimit,
+          c.perUserLimit,
+          c.firstOrderOnly ? 'first order' : '',
+          c.usageCount,
           c.active ? 'active' : 'inactive',
           c.id,
         ]
@@ -65,7 +109,7 @@ export function CouponsPage() {
     <div className="space-y-4">
       <PageHeader
         title="Coupons"
-        description="Create coupon codes for the user app checkout."
+        description="Create coupon codes for the user app checkout. Optional per-user limits, first-order-only, and category/service restrictions."
         actions={
           <>
             <SearchInput value={search} onChange={setSearch} placeholder="Search coupons..." />
@@ -93,11 +137,28 @@ export function CouponsPage() {
                 <p className="font-mono text-lg font-semibold text-[var(--on-surface)]">{c.code}</p>
                 <p className="mt-1 text-xs text-[var(--on-surface-variant)]">ID: {c.id}</p>
                 <p className="mt-2 text-sm text-[var(--on-surface-variant)]">
-                  {c.discountType === 'percentage' ? `${c.discountValue}%` : `₹${c.discountValue}`} off • Min ₹{c.minOrderAmount || 0}
+                  {couponDiscountLabel(c)} off • Min ₹{c.minOrderAmount || 0}
                   {c.maxDiscount ? ` • Max ₹${c.maxDiscount}` : ''}
                 </p>
                 <p className="mt-1 text-xs text-[var(--on-surface-variant)]">
-                  Expiry: {c.expiryDate?.toDate?.() ? c.expiryDate.toDate().toLocaleString() : '—'}
+                  Expiry:{' '}
+                  {(c.expiresAt || c.expiryDate)?.toDate?.()
+                    ? (c.expiresAt || c.expiryDate).toDate().toLocaleString()
+                    : '—'}
+                </p>
+                <p className="mt-1 text-xs text-[var(--on-surface-variant)]">
+                  Usage: {Number(c.usageCount ?? 0)}
+                  {c.usageLimit != null && c.usageLimit !== '' ? ` / ${c.usageLimit}` : ' (no limit)'}
+                  {c.perUserLimit != null && c.perUserLimit !== ''
+                    ? ` • Per user: ${c.perUserLimit}`
+                    : ''}
+                </p>
+                <p className="mt-1 text-xs text-[var(--on-surface-variant)]">
+                  {c.firstOrderOnly ? 'First order only' : 'Any order'}
+                  {(Array.isArray(c.categoryIds) && c.categoryIds.length) ||
+                  (Array.isArray(c.serviceIds) && c.serviceIds.length)
+                    ? ` • Restricted (${(c.categoryIds || []).length} categories, ${(c.serviceIds || []).length} services)`
+                    : ' • All categories/services'}
                 </p>
               </div>
               <Badge tone={c.active ? 'success' : 'warning'}>{c.active ? 'Active' : 'Inactive'}</Badge>
@@ -107,13 +168,24 @@ export function CouponsPage() {
                 variant="ghost"
                 type="button"
                 onClick={() => {
+                  const type = c.discountType === 'percentage' ? 'percentage' : 'flat'
+                  const value =
+                    type === 'percentage'
+                      ? c.discountPercent ?? c.discountValue ?? c.value
+                      : c.discountFlat ?? c.discountValue ?? c.value
                   setForm({
                     ...initialCoupon,
                     ...c,
-                    discountValue: String(c.discountValue ?? ''),
+                    discountType: type,
+                    discountValue: String(value ?? ''),
                     minOrderAmount: String(c.minOrderAmount ?? ''),
                     maxDiscount: c.maxDiscount == null ? '' : String(c.maxDiscount),
-                    expiryDate: toDateTimeLocal(c.expiryDate),
+                    expiryDate: toDateTimeLocal(c.expiresAt || c.expiryDate),
+                    usageLimit: c.usageLimit == null ? '' : String(c.usageLimit),
+                    perUserLimit: c.perUserLimit == null ? '' : String(c.perUserLimit),
+                    firstOrderOnly: Boolean(c.firstOrderOnly),
+                    categoryIds: Array.isArray(c.categoryIds) ? c.categoryIds.map(String) : [],
+                    serviceIds: Array.isArray(c.serviceIds) ? c.serviceIds.map(String) : [],
                     active: Boolean(c.active),
                   })
                   setOpen(true)
@@ -125,7 +197,10 @@ export function CouponsPage() {
                 variant="danger"
                 type="button"
                 disabled={Boolean(mutating.couponDelete)}
-                onClick={() => deleteCoupon(c.id)}
+                onClick={() => {
+                  if (!window.confirm(`Delete coupon ${c.code || c.id}?`)) return
+                  void deleteCoupon(c.id)
+                }}
               >
                 Delete
               </Button>
@@ -180,6 +255,79 @@ export function CouponsPage() {
               placeholder="Leave blank for no limit"
             />
           </Field>
+          <Field label="Usage limit (optional)">
+            <Input
+              type="number"
+              min="0"
+              value={form.usageLimit}
+              onChange={(e) => setForm((cur) => ({ ...cur, usageLimit: e.target.value }))}
+              placeholder="Leave blank for unlimited"
+            />
+          </Field>
+          <Field label="Per-user limit (optional)">
+            <Input
+              type="number"
+              min="1"
+              value={form.perUserLimit}
+              onChange={(e) => setForm((cur) => ({ ...cur, perUserLimit: e.target.value }))}
+              placeholder="e.g. 1 — leave blank for no per-user cap"
+            />
+          </Field>
+          <Field label="First order only">
+            <Select
+              value={form.firstOrderOnly ? 'true' : 'false'}
+              onChange={(e) => setForm((c) => ({ ...c, firstOrderOnly: e.target.value === 'true' }))}
+            >
+              <option value="false">No — any order</option>
+              <option value="true">Yes — first order only</option>
+            </Select>
+          </Field>
+          <Field label="Categories (optional — empty = all)">
+            <div className="max-h-40 space-y-2 overflow-y-auto rounded-2xl border border-[var(--outline-variant)] bg-[var(--surface-lowest)] p-3">
+              {!categoryOptions.length ? (
+                <p className="text-xs text-[var(--on-surface-variant)]">No categories loaded.</p>
+              ) : (
+                categoryOptions.map((opt) => (
+                  <label key={opt.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={(form.categoryIds || []).includes(opt.id)}
+                      onChange={() =>
+                        setForm((cur) => ({
+                          ...cur,
+                          categoryIds: toggleId(cur.categoryIds, opt.id),
+                        }))
+                      }
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))
+              )}
+            </div>
+          </Field>
+          <Field label="Services (optional — empty = all)">
+            <div className="max-h-40 space-y-2 overflow-y-auto rounded-2xl border border-[var(--outline-variant)] bg-[var(--surface-lowest)] p-3">
+              {!serviceOptions.length ? (
+                <p className="text-xs text-[var(--on-surface-variant)]">No services loaded.</p>
+              ) : (
+                serviceOptions.map((opt) => (
+                  <label key={opt.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={(form.serviceIds || []).includes(opt.id)}
+                      onChange={() =>
+                        setForm((cur) => ({
+                          ...cur,
+                          serviceIds: toggleId(cur.serviceIds, opt.id),
+                        }))
+                      }
+                    />
+                    <span className="truncate">{opt.label}</span>
+                  </label>
+                ))
+              )}
+            </div>
+          </Field>
           <Field label="Expiry date & time">
             <Input
               type="datetime-local"
@@ -199,6 +347,8 @@ export function CouponsPage() {
             <p>
               Notes for checkout validation: coupon must be <strong>active</strong>, not expired, and order total must be
               at least <strong>min order amount</strong>. If percentage, apply <strong>max discount</strong> if set.
+              Usage / per-user limits and category/service filters are stored for apps that enforce them. Older coupons
+              without these fields remain valid (no restriction).
             </p>
           </div>
 
@@ -215,4 +365,3 @@ export function CouponsPage() {
     </div>
   )
 }
-

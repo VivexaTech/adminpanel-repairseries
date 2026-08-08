@@ -1,5 +1,5 @@
 /**
- * Admin invoice actions via Next.js API (Spark-safe — no Firebase callable functions).
+ * Admin invoice actions via Next.js / Vercel API (no Firebase Cloud Functions).
  */
 import { auth } from '../firebase/config'
 

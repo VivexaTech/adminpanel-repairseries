@@ -5,7 +5,7 @@ export const BOOKING_NOTIFICATION_TITLE = 'Booking Update'
 
 /**
  * Maps admin booking lifecycle events to user-visible copy.
- * @param {'created' | 'assigned' | 'started' | 'completed' | 'add_on_approval_needed' | 'add_on_approved' | 'add_on_rejected'} eventType
+ * @param {'created' | 'assigned' | 'started' | 'completed' | 'cancelled' | 'rescheduled' | 'add_on_approval_needed' | 'add_on_approved' | 'add_on_rejected'} eventType
  * @param {string} [serviceName]
  */
 export function bookingNotificationBody(eventType, serviceName = '') {
@@ -19,6 +19,10 @@ export function bookingNotificationBody(eventType, serviceName = '') {
       return `Your ${s} service has started.`
     case 'completed':
       return `Your ${s} booking is complete. Thank you!`
+    case 'cancelled':
+      return `Your ${s} booking has been cancelled. Contact support if you need help.`
+    case 'rescheduled':
+      return `Your ${s} booking has been rescheduled. Open the app to see the new time.`
     case 'add_on_approval_needed':
       return `Your technician added extra items to ${s}. Open the app to review and approve the new total.`
     case 'add_on_approved':
