@@ -27,8 +27,13 @@ export function normalizeShiftStatus(technician) {
 export function isTechnicianAssignable(technician) {
   if (!technician) return false
   if (technician.suspended === true) return false
+  const kycStatus = String(technician?.kyc?.status ?? '').trim().toLowerCase()
+  if (kycStatus && kycStatus !== 'approved') return false
   const v = normalizeVerificationStatus(technician)
-  return v === 'active'
+  if (v === 'rejected' || v === 'pending' || v === 'inactive' || v === 'suspended') {
+    return false
+  }
+  return true
 }
 
 export function verificationAccountBadge(technician) {

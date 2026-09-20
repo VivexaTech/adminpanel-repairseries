@@ -32,6 +32,7 @@ export function canAccessPath(role, pathname) {
   const normalized = (pathname || '/').replace(/\/$/, '') || '/'
   if (
     normalized === '/platform-settings' ||
+    normalized === '/support-legal' ||
     normalized === '/invoice-settings' ||
     normalized === '/finance-reports' ||
     normalized === '/service-areas'

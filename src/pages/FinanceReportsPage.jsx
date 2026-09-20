@@ -90,10 +90,8 @@ export function FinanceReportsPage() {
       return true
     })
 
-    let gross = 0
     const lineItems = rows.map((b) => {
       const amount = getStoredBookingTotalAmount(b)
-      gross += amount
       const d = bookingReportDate(b)
       return {
         bookingId: b.id,
@@ -104,6 +102,7 @@ export function FinanceReportsPage() {
         totalAmount: amount,
       }
     })
+    const gross = lineItems.reduce((sum, row) => sum + Number(row.totalAmount || 0), 0)
 
     const rate = Number(gstPercent)
     const safeRate = Number.isFinite(rate) && rate >= 0 ? rate : 18

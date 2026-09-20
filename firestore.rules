@@ -101,29 +101,102 @@ service cloud.firestore {
         'latestLocation',
         'locationUpdatedAt',
         'notificationPrefs',
+        'totalBookings',
         'updatedAt',
       ]);
     }
 
-    // Customer user app: Approve / reject add-on batch (must match booking math in app or Cloud Function).
+    // Customer may accept/reject extras. Money fields stay server-authoritative.
     function customerAddOnDecisionPatchOnly() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         'addOnServices',
+        'additionalServices',
         'addOnApprovalRequest',
         'extrasApprovalRequest',
-        'originalBookingAmount',
-        'addedServicesAmount',
-        'finalBookingAmount',
-        'platformFeeAmount',
-        'addonFeeAmount',
-        'totalDeduction',
-        'technicianFinalEarning',
-        'totalAmount',
-        'finalAmount',
-        'technicianEarning',
-        'platformCommission',
+        'serviceId',
+        'serviceName',
+        'replacedService',
+        'serviceChangeHistory',
         'updatedAt',
       ]);
+    }
+
+    function bookingMoneyOrAssignmentKeys() {
+      return [
+        'technicianId',
+        'technicianName',
+        'technicianPhone',
+        'assignedTechnicianId',
+        'amount',
+        'totalAmount',
+        'finalBookingAmount',
+        'finalAmount',
+        'servicePrice',
+        'technicianFinalEarning',
+        'technicianEarning',
+        'companyEarnings',
+        'platformFeeAmount',
+        'platformCommission',
+        'customerPlatformFee',
+        'gstAmount',
+        'gstPercent',
+        'gstEnabled',
+        'financeFormulaVersion',
+      ];
+    }
+
+    function customerBookingCreateAllowed() {
+      return authed()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == 'New'
+        && !request.resource.data.keys().hasAny([
+          'technicianId',
+          'technicianName',
+          'technicianPhone',
+          'assignedTechnicianId',
+          'technicianFinalEarning',
+          'technicianEarning',
+          'companyEarnings',
+          'platformFeeAmount',
+          'platformCommission',
+          'customerPlatformFee',
+          'gstAmount',
+          'gstPercent',
+          'gstEnabled',
+          'totalAmount',
+          'finalBookingAmount',
+          'finalAmount',
+          'paymentStatus',
+          'paymentVerified',
+          'paidAt',
+        ]);
+    }
+
+    function partnerSelfCreateAllowed() {
+      return authed()
+        && request.resource.data.accountStatus == 'pending'
+        && request.resource.data.verificationStatus == 'pending';
+    }
+
+    function partnerSelfUpdateAllowed() {
+      return request.resource.data.accountStatus == resource.data.accountStatus
+        && request.resource.data.verificationStatus == resource.data.verificationStatus
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['suspended'])
+        )
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['kyc'])
+          || request.resource.data.kyc.status != 'approved'
+          || resource.data.kyc.status == 'approved'
+        );
+    }
+
+    function technicianJobPatchAllowed() {
+      return technicianOwnsBookingData(resource.data)
+        && request.resource.data.technicianId == resource.data.technicianId
+        && request.resource.data.customerId == resource.data.customerId
+        && !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(bookingMoneyOrAssignmentKeys());
     }
 
     // RS App payment confirmation is server-only via confirmCustomerPayment callable.
@@ -148,6 +221,10 @@ service cloud.firestore {
         'revisitChildrenCount',
         'revisitHistory',
         'lastRevisitAt',
+        'revisitRemaining',
+        'remainingRevisits',
+        'freeRevisitsRemaining',
+        'revisitPolicy',
         'updatedAt',
       ]);
     }
@@ -160,6 +237,99 @@ service cloud.firestore {
         'invoiceCreatedAt',
         'updatedAt',
       ]);
+    }
+
+    function customerOwnsBookingId(bookingId) {
+      return authed()
+        && bookingId is string
+        && bookingId.size() > 0
+        && exists(/databases/$(database)/documents/bookings/$(bookingId))
+        && get(/databases/$(database)/documents/bookings/$(bookingId)).data.customerId == request.auth.uid;
+    }
+
+    function customerAssignmentPatchOnly() {
+      return request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.status == 'Assigned'
+        && (resource.data.status == 'New'
+          || resource.data.status == 'Assigned'
+          || resource.data.status == 'pending')
+        && request.resource.data.technicianId is string
+        && request.resource.data.technicianId.size() > 0
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'technicianId',
+          'technicianName',
+          'technicianPhone',
+          'scheduledSlotDate',
+          'scheduledSlotLabel',
+          'scheduledSlotIndex',
+          'scheduleDateKey',
+          'scheduleSlotIndex',
+          'reservedSlotIndices',
+          'updatedAt',
+        ]);
+    }
+
+    function customerBusySlotCreateAllowed() {
+      return authed()
+        && request.resource.data.reason == 'booking'
+        && request.resource.data.status == 'busy'
+        && request.resource.data.bookingId is string
+        && request.resource.data.bookingId.size() > 0
+        && request.resource.data.date is string
+        && (request.resource.data.slotIndex is int || request.resource.data.slotIndex is float)
+        && request.resource.data.slotIndex >= 1
+        && request.resource.data.slotIndex <= 10
+        && existsAfter(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId))
+        && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.customerId == request.auth.uid
+        && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.technicianId == techId
+        && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.status == 'Assigned';
+    }
+
+    function customerBusySlotDeleteAllowed() {
+      return authed()
+        && resource.data.reason == 'booking'
+        && resource.data.bookingId is string
+        && customerOwnsBookingId(resource.data.bookingId);
+    }
+
+    function customerBusySlotUpdateAllowed() {
+      return authed()
+        && resource.data.reason == 'booking'
+        && request.resource.data.reason == 'booking'
+        && request.resource.data.status == 'busy'
+        && resource.data.bookingId == request.resource.data.bookingId
+        && customerOwnsBookingId(resource.data.bookingId);
+    }
+
+    function customerReschedulePatchOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'scheduledAt',
+        'scheduledSlotDate',
+        'scheduledSlotLabel',
+        'scheduledSlotIndex',
+        'scheduleDateKey',
+        'scheduleSlotIndex',
+        'slotStartHour',
+        'date',
+        'time',
+        'slot',
+        'bookingDate',
+        'updatedAt',
+        'rescheduledAt',
+      ])
+        && request.resource.data.customerId == resource.data.customerId;
+    }
+
+    function customerCancelPatchOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status',
+        'cancelledBy',
+        'cancelledAt',
+        'updatedAt',
+      ])
+        && request.resource.data.status == 'Cancelled'
+        && request.resource.data.customerId == resource.data.customerId;
     }
 
     match /adminUsers/{userId} {
@@ -194,13 +364,30 @@ service cloud.firestore {
     }
 
     match /technicians/{docId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager() || isSupportManager();
-      allow write: if isSuperAdmin() || isTechnicianManager();
+      // Not world-readable. Signed-in customers need location/category for slot ranking.
+      allow read: if authed();
+      allow create: if isSuperAdmin() || isTechnicianManager()
+        || (authed() && request.auth.uid == docId && partnerSelfCreateAllowed());
+      allow update: if isSuperAdmin() || isTechnicianManager()
+        || (authed() && request.auth.uid == docId && partnerSelfUpdateAllowed());
+      allow delete: if isSuperAdmin() || isTechnicianManager();
     }
 
     match /technicians/{techId}/busySlots/{slotId} {
-      allow read: if isSuperAdmin() || isBookingManager() || isTechnicianManager() || isSupportManager();
-      allow write: if isSuperAdmin() || isBookingManager() || isTechnicianManager() || isSupportManager();
+      allow read: if authed();
+      allow create: if isSuperAdmin() || isBookingManager() || isTechnicianManager()
+        || (isTechnicianActor() && request.auth.uid == techId
+          && request.resource.data.reason != 'booking')
+        || customerBusySlotCreateAllowed();
+      allow update: if isSuperAdmin() || isBookingManager() || isTechnicianManager()
+        || (isTechnicianActor() && request.auth.uid == techId
+          && resource.data.reason != 'booking'
+          && request.resource.data.reason != 'booking')
+        || customerBusySlotUpdateAllowed();
+      allow delete: if isSuperAdmin() || isBookingManager() || isTechnicianManager()
+        || (isTechnicianActor() && request.auth.uid == techId
+          && resource.data.reason != 'booking')
+        || customerBusySlotDeleteAllowed();
     }
 
     match /technicians/{techId}/transactions/{txId} {
@@ -223,9 +410,9 @@ service cloud.firestore {
         || technicianOwnsBookingData(resource.data)
         || customerOwnsBooking(resource.data);
       allow create: if isSuperAdmin() || isBookingManager()
-        || (authed()
-          && request.resource.data.customerId == request.auth.uid);
+        || customerBookingCreateAllowed();
       allow update: if isSuperAdmin() || isBookingManager() || isSupportManager()
+        || technicianJobPatchAllowed()
         || (technicianOwnsBookingData(resource.data)
             && request.resource.data.technicianId == resource.data.technicianId
             && request.resource.data.customerId == resource.data.customerId
@@ -234,13 +421,20 @@ service cloud.firestore {
               || technicianPausePatchOnly()
             ))
         || (customerOwnsBooking(resource.data)
-            && request.resource.data.technicianId == resource.data.technicianId
             && request.resource.data.customerId == resource.data.customerId
             && (
-              customerAddOnDecisionPatchOnly()
-              || customerRatingPatchOnly()
-              || customerRevisitParentPatchOnly()
-              || customerInvoiceLinkPatchOnly()
+              customerReschedulePatchOnly()
+              || customerCancelPatchOnly()
+              || customerAssignmentPatchOnly()
+              || (
+                request.resource.data.technicianId == resource.data.technicianId
+                && (
+                  customerAddOnDecisionPatchOnly()
+                  || customerRatingPatchOnly()
+                  || customerRevisitParentPatchOnly()
+                  || customerInvoiceLinkPatchOnly()
+                )
+              )
             ));
       allow delete: if isSuperAdmin() || isBookingManager();
     }
@@ -302,11 +496,7 @@ service cloud.firestore {
       allow read: if isSuperAdmin() || isBookingManager() || isServiceManager()
         || (authed() && (!('active' in resource.data) || resource.data.active != false));
       allow write: if isSuperAdmin() || isServiceManager();
-      // Customers may record a redemption + bump usageCount atomically from the app.
-      allow update: if isSuperAdmin() || isServiceManager()
-        || (authed()
-          && request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['usageCount', 'updatedAt']));
+      allow update: if isSuperAdmin() || isServiceManager();
 
       match /couponRedemptions/{redemptionId} {
         allow read: if isSuperAdmin() || isServiceManager() || isBookingManager()

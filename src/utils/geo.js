@@ -53,8 +53,8 @@ export function getTechnicianLatLng(technician) {
   if (!technician) return { lat: null, lng: null }
   const loc = technician.location
   if (loc != null && typeof loc === 'object') {
-    const latRaw = loc.lat ?? loc.latitude
-    const lngRaw = loc.lng ?? loc.longitude
+    const latRaw = loc.lat ?? loc.latitude ?? loc._latitude
+    const lngRaw = loc.lng ?? loc.longitude ?? loc._longitude
     const lat = latRaw != null && latRaw !== '' ? Number(latRaw) : null
     const lng = lngRaw != null && lngRaw !== '' ? Number(lngRaw) : null
     if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng }

@@ -1,5 +1,6 @@
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore'
 import { db, isFirebaseConfigured } from '../firebase/config'
+import { requestRemotePush } from './websiteApi'
 
 export const BOOKING_NOTIFICATION_TITLE = 'Booking Update'
 
@@ -35,26 +36,49 @@ export function bookingNotificationBody(eventType, serviceName = '') {
 }
 
 /**
- * Queues a push for the Cloud Function `deliverBookingNotification` to send via FCM.
- * Customer doc should include `fcmTokens` (string[]) from the user app.
+ * Deliver a remote push via the website Vercel API.
+ * Falls back to `bookingNotificationOutbox` if the API is unavailable.
  */
 export async function enqueueBookingNotification({
   customerId,
   bookingId = '',
   eventType,
   serviceName = '',
+  technicianId = '',
+  audience = 'both',
 }) {
-  if (!isFirebaseConfigured || !db) return
   if (!customerId || !eventType) return
+
+  try {
+    await requestRemotePush({
+      eventType,
+      bookingId: String(bookingId || ''),
+      customerId: String(customerId),
+      technicianId: String(technicianId || ''),
+      serviceName: String(serviceName || ''),
+      audience,
+    })
+    return
+  } catch (err) {
+    console.warn('[notify] Vercel send failed, queueing outbox', err?.message || err)
+  }
+
+  if (!isFirebaseConfigured || !db) return
 
   await addDoc(collection(db, 'bookingNotificationOutbox'), {
     customerId,
+    technicianId: String(technicianId || ''),
     bookingId: String(bookingId),
     eventType,
     title: BOOKING_NOTIFICATION_TITLE,
     body: bookingNotificationBody(eventType, serviceName),
     serviceName: String(serviceName || ''),
+    audience,
     processed: false,
+    status: 'pending',
+    attemptCount: 0,
+    operationType: 'notification',
     createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   })
 }

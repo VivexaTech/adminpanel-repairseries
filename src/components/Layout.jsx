@@ -54,6 +54,7 @@ const navItems = [
   { to: '/peak-hours', label: 'Peak Hours', icon: Clock3 },
   { to: '/scheduling-settings', label: 'Scheduling', icon: CalendarClock },
   { to: '/platform-settings', label: 'Platform Settings', icon: SlidersHorizontal },
+  { to: '/support-legal', label: 'Support & Legal', icon: FileText },
   { to: '/invoice-settings', label: 'Invoice Settings', icon: FileText },
   { to: '/users', label: 'Users', icon: Users },
 ]
@@ -71,6 +72,7 @@ export function AdminLayout({ children }) {
       'additional-services': 'Additional Services',
       'import-services': 'Import Services',
       'platform-settings': 'Platform Settings',
+      'support-legal': 'Support & Legal',
       bookings: 'Bookings',
       revisits: 'Revisit Management',
       invoices: 'Invoice Management',

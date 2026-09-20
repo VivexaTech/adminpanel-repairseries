@@ -31,6 +31,51 @@ export const BANNER_SECTION_LABELS = Object.fromEntries(
   BANNER_SECTIONS.map((s) => [s.value, s.label]),
 )
 
+const BANNER_SECTION_ALIASES = {
+  homepage: 'home',
+  home_page: 'home',
+  home_featured: 'featured',
+  offer: 'offers',
+  promo: 'offers',
+  service: 'services',
+  booking: 'bookings',
+  my_bookings: 'bookings',
+  profile: 'account',
+  category_page: 'category',
+  category_services: 'category',
+  service_detail: 'service_details',
+  servicedetails: 'service_details',
+  popular: 'popular_services',
+  featured_services: 'featured',
+  comingsoon: 'coming_soon',
+  coming_soon_home: 'coming_soon_main',
+  ac_service: 'ac',
+  ac_repair: 'ac',
+  acservice: 'ac',
+  air_conditioner: 'ac',
+  air_conditioning: 'ac',
+  airconditioner: 'ac',
+  washingmachine: 'washing_machine',
+  washer: 'washing_machine',
+  laundry: 'washing_machine',
+  kitchen: 'kitchen_appliances',
+  kitchen_appliance: 'kitchen_appliances',
+  appliance: 'kitchen_appliances',
+  appliances: 'kitchen_appliances',
+  appliance_repair: 'kitchen_appliances',
+  deep_cleaning: 'cleaning',
+  house_cleaning: 'cleaning',
+}
+
+/** Canonical banner section id stored in Firebase `banners.section`. */
+export function normalizeBannerSection(raw) {
+  const s = String(raw || 'home')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+  return BANNER_SECTION_ALIASES[s] || s || 'home'
+}
+
 /** Coming Soon service segment (Main vs Commercial). */
 export const COMING_SOON_CATEGORIES = [
   { value: 'main', label: 'Main Services' },
@@ -51,8 +96,8 @@ export function normalizeComingSoonCategory(value) {
 
 /** Default peak windows (local hours, end exclusive). */
 export const DEFAULT_PEAK_WINDOWS = [
-  { startHour: 9, endHour: 11, label: 'Morning Peak' },
-  { startHour: 18, endHour: 21, label: 'Evening Peak' },
+  { startHour: 9, endHour: 11, label: 'Morning Peak', enabled: true },
+  { startHour: 18, endHour: 21, label: 'Evening Peak', enabled: true },
 ]
 
 export const DEFAULT_RANKING_PENALTIES = {

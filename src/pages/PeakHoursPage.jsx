@@ -51,6 +51,7 @@ export function PeakHoursPage() {
           startHour: Number(w.startHour),
           endHour: Number(w.endHour),
           label: String(w.label || `Peak ${i + 1}`),
+          enabled: w.enabled !== false,
         }))
       : DEFAULT_PEAK_WINDOWS.map((w) => ({ ...w }))
     setWindows(pw)
@@ -98,8 +99,9 @@ export function PeakHoursPage() {
       return
     }
     for (const w of windows) {
+      if (w.enabled === false) continue
       if (!Number.isFinite(w.startHour) || !Number.isFinite(w.endHour) || w.endHour <= w.startHour) {
-        toast.error('Each peak window needs end hour after start hour.')
+        toast.error('Each enabled peak window needs end hour after start hour.')
         return
       }
     }
@@ -146,9 +148,15 @@ export function PeakHoursPage() {
         silverThreshold: s,
         goldThreshold: g,
         blockOfflineDuringPeak: Boolean(blockOffline),
-        // Keep legacy slot fields in sync with first window for older clients
-        peakHourSlotStart: Math.max(0, Number(windows[0]?.startHour ?? 9) - 8),
-        peakHourSlotEnd: Math.max(0, Number(windows[0]?.endHour ?? 11) - 8),
+        // Keep legacy slot fields in sync with first enabled window for older clients
+        peakHourSlotStart: Math.max(
+          0,
+          Number((windows.find((w) => w.enabled !== false) || windows[0])?.startHour ?? 9) - 8,
+        ),
+        peakHourSlotEnd: Math.max(
+          0,
+          Number((windows.find((w) => w.enabled !== false) || windows[0])?.endHour ?? 11) - 8,
+        ),
         revisitFreeLimit: rf,
         revisitPctTargets: rp,
         jobsTargets: jt,
@@ -175,11 +183,11 @@ export function PeakHoursPage() {
           <div>
             <h3 className="text-base font-semibold text-[var(--on-surface)]">Peak windows</h3>
             <p className="mt-1 text-sm text-[var(--on-surface-variant)]">
-              Local hours (end exclusive). Example: 9–11 AM and 6–9 PM.
+              Any number of local hour ranges (end exclusive). Example: 8:00–10:00 groups two 1-hour partner slots visually; bookings stay per hour.
             </p>
             <div className="mt-4 space-y-3">
               {windows.map((w, idx) => (
-                <div key={idx} className="grid gap-3 rounded-2xl border border-[var(--outline-variant)]/50 p-4 sm:grid-cols-[1fr_120px_120px_auto]">
+                <div key={idx} className="grid gap-3 rounded-2xl border border-[var(--outline-variant)]/50 p-4 sm:grid-cols-[1fr_120px_120px_auto_auto]">
                   <Field label="Label">
                     <Input
                       value={w.label}
@@ -224,10 +232,25 @@ export function PeakHoursPage() {
                     </Select>
                   </Field>
                   <div className="flex items-end">
+                    <label className="flex items-center gap-2 pb-2 text-sm text-[var(--on-surface)]">
+                      <input
+                        type="checkbox"
+                        checked={w.enabled !== false}
+                        onChange={(e) =>
+                          setWindows((rows) =>
+                            rows.map((r, i) => (i === idx ? { ...r, enabled: e.target.checked } : r)),
+                          )
+                        }
+                        disabled={busy || settingsLoading}
+                      />
+                      Enabled
+                    </label>
+                  </div>
+                  <div className="flex items-end">
                     <Button
                       type="button"
                       variant="ghost"
-                      disabled={windows.length <= 1 || busy}
+                      disabled={busy}
                       onClick={() => setWindows((rows) => rows.filter((_, i) => i !== idx))}
                     >
                       Remove
@@ -242,7 +265,10 @@ export function PeakHoursPage() {
               className="mt-3"
               disabled={busy}
               onClick={() =>
-                setWindows((rows) => [...rows, { startHour: 9, endHour: 11, label: `Peak ${rows.length + 1}` }])
+                setWindows((rows) => [
+                  ...rows,
+                  { startHour: 9, endHour: 11, label: `Peak ${rows.length + 1}`, enabled: true },
+                ])
               }
             >
               Add window

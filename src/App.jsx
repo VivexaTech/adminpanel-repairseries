@@ -13,6 +13,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { ImportServicesPage } from './pages/ImportServicesPage'
 import { LoginPage } from './pages/LoginPage'
 import { PlatformSettingsPage } from './pages/PlatformSettingsPage'
+import { SupportLegalPage } from './pages/SupportLegalPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { TechniciansPage } from './pages/TechniciansPage'
 import { OffersPage } from './pages/OffersPage'
@@ -139,6 +140,14 @@ function App() {
           element={
             <ProtectedRoute>
               <PlatformSettingsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/support-legal"
+          element={
+            <ProtectedRoute>
+              <SupportLegalPage />
             </ProtectedRoute>
           }
         />

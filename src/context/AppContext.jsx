@@ -20,6 +20,7 @@ import { toast } from 'sonner'
 import {
   DEFAULT_PEAK_WINDOWS,
   DEFAULT_RANKING_PENALTIES,
+  normalizeBannerSection,
   normalizeComingSoonCategory,
 } from '../constants/catalog'
 import { normalizeHomeSectionPayload } from '../constants/homeSections'
@@ -40,12 +41,13 @@ import { normalizeSchedulingSettings } from '../services/schedulingSettings'
 import { parseAdditionalServiceCsvRow } from '../services/additionalServiceCsvImport'
 import { parseServiceCsvRow } from '../services/serviceCsvImport'
 import { enqueueBookingNotification } from '../services/bookingNotifications'
+import { assignPartner, freezeBookingEconomics } from '../services/websiteApi'
 import { geocodeAddressString } from '../services/geocode'
 import { playNewBookingSiren, preloadAlertSounds } from '../utils/alertSounds'
 import { formatBookingAddressForDisplay, normalizeBookingAddressForStorage } from '../utils/bookingAddress'
 import { getBookingLatLng, getTechnicianLatLng, haversineDistanceKm, parseCoord, parseCoordLng } from '../utils/geo'
 import { getSlotDescriptorsForBookingWindow, TIMEZONE } from '../utils/technicianSlots'
-import { releaseBusySlotsForBooking, reserveBusySlotsForBooking, verifyBusySlotsFree } from '../services/technicianBusySlots'
+import { releaseBusySlotsForBooking, verifyBusySlotsFree } from '../services/technicianBusySlots'
 import {
   applyTechnicianEarningToBatch,
   createTechnicianPayoutRecord,
@@ -72,15 +74,16 @@ function technicianMatchesServiceCategory(technician, service) {
   return arr.some((id) => String(id).trim() === target)
 }
 
-function technicianWithinBookingRadius(technician, bookingLatLng, platformKm) {
+function technicianHasValidLocation(technician) {
   const { lat: tLat, lng: tLng } = getTechnicianLatLng(technician)
-  if (tLat == null || tLng == null) return false
-  const defaultR = Number(platformKm) > 0 ? Number(platformKm) : 10
-  const techR = Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : defaultR
-  const maxKm = Math.min(techR, defaultR)
-  const { lat: bLat, lng: bLng } = bookingLatLng
-  if (bLat == null || bLng == null) return true
-  return haversineDistanceKm(tLat, tLng, bLat, bLng) <= maxKm
+  return tLat != null && tLng != null
+}
+
+function technicianDistanceKm(technician, bookingLatLng) {
+  const { lat: tLat, lng: tLng } = getTechnicianLatLng(technician)
+  const { lat: bLat, lng: bLng } = bookingLatLng || {}
+  if (tLat == null || tLng == null || bLat == null || bLng == null) return null
+  return haversineDistanceKm(tLat, tLng, bLat, bLng)
 }
 
 function localDateKey(value) {
@@ -187,6 +190,7 @@ const IDLE_LOADING = {
   invoices: false,
   platformSettings: false,
   rankingSettings: false,
+  appSettings: false,
 }
 
 const AppContext = createContext(null)
@@ -211,6 +215,7 @@ export function AppProvider({ children }) {
     invoices: true,
     platformSettings: false,
     rankingSettings: false,
+    appSettings: false,
   })
   const [mutating, setMutating] = useState({})
   const [data, setData] = useState({
@@ -230,6 +235,7 @@ export function AppProvider({ children }) {
   })
   const [platformSettings, setPlatformSettings] = useState(null)
   const [rankingSettings, setRankingSettings] = useState(null)
+  const [appSettings, setAppSettings] = useState(null)
   const bookingsBootstrapped = useRef(false)
   const profileUnsubRef = useRef(null)
 
@@ -335,6 +341,9 @@ export function AppProvider({ children }) {
             defaultTechnicianServiceRadiusKm: docRow.defaultTechnicianServiceRadiusKm,
             platformCommissionPercent: docRow.platformCommissionPercent,
             addonFeePercent: docRow.addonFeePercent,
+            sparePartCommissionPercent: docRow.sparePartCommissionPercent,
+            customerPlatformFeeType: docRow.customerPlatformFeeType,
+            customerPlatformFeeValue: docRow.customerPlatformFeeValue,
             globalUpiId: docRow.globalUpiId,
             globalPaymentQr: docRow.globalPaymentQr,
             googleReviewUrl: docRow.googleReviewUrl,
@@ -376,6 +385,44 @@ export function AppProvider({ children }) {
   }, [session?.id])
 
   useEffect(() => {
+    if (!isFirebaseConfigured || !db || !session?.id) {
+      setAppSettings(null)
+      setLoading((current) => ({ ...current, appSettings: false }))
+      return undefined
+    }
+
+    setLoading((current) => ({ ...current, appSettings: true }))
+    const unsub = subscribeDoc(
+      'settings',
+      'app',
+      (row) => {
+        const d = row || {}
+        const str = (v) => (v == null ? '' : String(v).trim())
+        setAppSettings({
+          supportEmail: str(d.supportEmail || d.support_email),
+          supportPhone: str(d.supportPhone || d.support_phone),
+          aboutApp: str(d.aboutApp),
+          customerTerms: str(d.customerTerms),
+          customerPrivacyPolicy: str(d.customerPrivacyPolicy),
+          partnerTerms: str(d.partnerTerms),
+          partnerPrivacyPolicy: str(d.partnerPrivacyPolicy),
+          customerTermsUpdatedAt: d.customerTermsUpdatedAt || null,
+          customerPrivacyUpdatedAt: d.customerPrivacyUpdatedAt || null,
+          partnerTermsUpdatedAt: d.partnerTermsUpdatedAt || null,
+          partnerPrivacyUpdatedAt: d.partnerPrivacyUpdatedAt || null,
+          updatedAt: d.updatedAt || null,
+        })
+        setLoading((current) => ({ ...current, appSettings: false }))
+      },
+      () => {
+        setAppSettings(null)
+        setLoading((current) => ({ ...current, appSettings: false }))
+      },
+    )
+    return () => unsub?.()
+  }, [session?.id])
+
+  useEffect(() => {
     if (!isFirebaseConfigured || !db) return undefined
 
     if (!session?.id || !session.role) {
@@ -400,7 +447,7 @@ export function AppProvider({ children }) {
       bindings.forEach(({ key }) => {
         nextLoading[key] = true
       })
-      return { ...nextLoading, platformSettings: current.platformSettings, rankingSettings: current.rankingSettings }
+      return { ...nextLoading, platformSettings: current.platformSettings, rankingSettings: current.rankingSettings, appSettings: current.appSettings }
     })
 
     const unsubscribers = bindings.map(({ key, collectionName, options }) =>
@@ -696,51 +743,23 @@ export function AppProvider({ children }) {
     ) {
       throw new Error('Technician has reached the configured daily booking limit.')
     }
-    const bookingLatLng = getBookingLatLng(booking)
-    const platformKmRaw = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
-    const platformKmResolved = Number.isFinite(platformKmRaw) && platformKmRaw > 0 ? platformKmRaw : 10
-    if (!technicianWithinBookingRadius(technician, bookingLatLng, platformKmResolved)) {
-      throw new Error('This address is outside the technician’s service radius.')
-    }
-
     await withMutating('bookingAssign', async () => {
-      const prevTechId = booking.technicianId ? String(booking.technicianId) : ''
-      const prevStatus = booking.status
-      if (prevTechId) await releaseBusySlotsForBooking(prevTechId, bookingId)
-      const v = await verifyBusySlotsFree(technicianId, descriptors, null)
-      if (!v.ok) {
-        if (prevTechId) {
-          try {
-            await reserveBusySlotsForBooking(prevTechId, bookingId, descriptors, 'booking')
-          } catch {
-            /* best-effort restore */
-          }
-        }
-        throw new Error(v.message || 'Technician is not available for this time slot.')
-      }
-      try {
-        await updateDocFields('bookings', bookingId, {
-          technicianId,
-          status: 'Assigned',
-          travelBufferMinutes: scheduling.travelBufferMinutes,
-          reservedSlotIndices: descriptors.map((slot) => slot.slotIndex),
-          availabilityEndsAt: Timestamp.fromMillis(
-            startDate.getTime() +
-              (duration + scheduling.travelBufferMinutes) * 60_000,
-          ),
-        })
-        await reserveBusySlotsForBooking(technicianId, bookingId, descriptors, 'booking')
-      } catch (err) {
-        await updateDocFields('bookings', bookingId, { technicianId: prevTechId || null, status: prevStatus })
-        if (prevTechId) {
-          try {
-            await reserveBusySlotsForBooking(prevTechId, bookingId, descriptors, 'booking')
-          } catch {
-            /* best-effort */
-          }
-        }
-        throw err
-      }
+      await assignPartner({
+        bookingId,
+        mode: 'specific',
+        technicianId,
+        dateStr: localDateKey(startDate),
+        slotIndex: descriptors[0].slotIndex,
+        slotLabel: descriptors[0].slotLabel,
+        reservedSlotIndices: descriptors.map((slot) => slot.slotIndex),
+      })
+      await updateDocFields('bookings', bookingId, {
+        travelBufferMinutes: scheduling.travelBufferMinutes,
+        availabilityEndsAt: Timestamp.fromMillis(
+          startDate.getTime() +
+            (duration + scheduling.travelBufferMinutes) * 60_000,
+        ),
+      })
     })
     toast.success('Technician assigned.')
 
@@ -750,6 +769,8 @@ export function AppProvider({ children }) {
         bookingId,
         eventType: 'assigned',
         serviceName: booking.serviceName || '',
+        technicianId: technicianId || '',
+        audience: 'both',
       })
     } catch (err) {
       console.error('[FCM queue] assign', err)
@@ -792,6 +813,14 @@ export function AppProvider({ children }) {
     })
     toast.success('Booking updated.')
 
+    if (status === 'Completed') {
+      try {
+        await freezeBookingEconomics(bookingId)
+      } catch (err) {
+        console.warn('[freeze] booking economics', err?.message || err)
+      }
+    }
+
     if (!booking?.customerId) return
     const eventType =
       status === 'Completed'
@@ -808,6 +837,8 @@ export function AppProvider({ children }) {
         bookingId,
         eventType,
         serviceName: booking.serviceName || '',
+        technicianId: booking.technicianId || '',
+        audience: 'both',
       })
     } catch (err) {
       console.error('[FCM queue] status', err)
@@ -829,11 +860,8 @@ export function AppProvider({ children }) {
     if (!techId) throw new Error('No technician assigned.')
 
     await withMutating('bookingUnassign', async () => {
-      await releaseBusySlotsForBooking(techId, bookingId)
+      await assignPartner({ bookingId, mode: 'unassign' })
       await updateDocFields('bookings', bookingId, {
-        technicianId: null,
-        status: 'New',
-        reservedSlotIndices: [],
         availabilityEndsAt: deleteField(),
         assignedAt: deleteField(),
       })
@@ -861,11 +889,6 @@ export function AppProvider({ children }) {
 
     const techId = booking.technicianId ? String(booking.technicianId) : ''
     await withMutating('bookingReschedule', async () => {
-      if (techId) {
-        await releaseBusySlotsForBooking(techId, bookingId)
-        const v = await verifyBusySlotsFree(techId, descriptors, bookingId)
-        if (!v.ok) throw new Error(v.message || 'Technician is not available for the new slot.')
-      }
       await updateDocFields('bookings', bookingId, {
         scheduledAt: Timestamp.fromDate(startDate),
         dateTime: startDate.toISOString(),
@@ -877,7 +900,15 @@ export function AppProvider({ children }) {
         ),
       })
       if (techId) {
-        await reserveBusySlotsForBooking(techId, bookingId, descriptors, 'booking')
+        await assignPartner({
+          bookingId,
+          mode: 'specific',
+          technicianId: techId,
+          dateStr: descriptors[0].dateKey,
+          slotIndex: descriptors[0].slotIndex,
+          slotLabel: descriptors[0].slotLabel,
+          reservedSlotIndices: descriptors.map((slot) => slot.slotIndex),
+        })
       }
     })
     toast.success('Booking rescheduled.')
@@ -1026,7 +1057,7 @@ export function AppProvider({ children }) {
       } else {
         servicePrice = Number(service?.price ?? booking.amount ?? 0)
       }
-      const visitingCharge = Number(service?.visitingCharge ?? booking.visitingCharge ?? 0)
+      const visitingCharge = 0
       if (!Number.isFinite(servicePrice) || servicePrice < 0) throw new Error('Invalid service price.')
       if (!Number.isFinite(visitingCharge) || visitingCharge < 0) throw new Error('Invalid visiting charge.')
       const platformPctRaw = Number(platformSettings?.platformCommissionPercent)
@@ -1074,9 +1105,6 @@ export function AppProvider({ children }) {
         throw new Error('Booking time falls outside schedulable hourly slots (08:00–22:00 IST).')
       }
 
-      const platformKmRaw = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
-      const platformKmResolved =
-        Number.isFinite(platformKmRaw) && platformKmRaw > 0 ? platformKmRaw : 10
       const bookingLatLng = { lat, lng }
 
       if (booking.technicianId) {
@@ -1092,9 +1120,6 @@ export function AppProvider({ children }) {
         if (!technicianMatchesServiceCategory(pickTech, service)) {
           throw new Error('Selected technician’s category must match this service’s category.')
         }
-        if (!technicianWithinBookingRadius(pickTech, bookingLatLng, platformKmResolved)) {
-          throw new Error('Selected technician is outside the service radius for this address.')
-        }
         const v = await verifyBusySlotsFree(booking.technicianId, descriptors, null)
         if (!v.ok) throw new Error(v.message || 'Technician is not available for this time slot.')
       }
@@ -1107,11 +1132,20 @@ export function AppProvider({ children }) {
           return { technicianId: null, assigned: false, status: 'Pending' }
         }
         const candidates = data.technicians.filter(
-          (t) => technicianMatchesServiceCategory(t, service) && isTechnicianAssignable(t),
+          (t) =>
+            technicianMatchesServiceCategory(t, service) &&
+            isTechnicianAssignable(t) &&
+            technicianHasValidLocation(t),
         )
-        const sorted = [...candidates].sort((a, b) => String(a.id).localeCompare(String(b.id)))
+        const sorted = [...candidates].sort((a, b) => {
+          const da = technicianDistanceKm(a, bookingLatLng)
+          const db = technicianDistanceKm(b, bookingLatLng)
+          if (da == null && db == null) return String(a.id).localeCompare(String(b.id))
+          if (da == null) return 1
+          if (db == null) return -1
+          return da - db
+        })
         for (const tech of sorted) {
-          if (!technicianWithinBookingRadius(tech, bookingLatLng, platformKmResolved)) continue
           if (
             technicianDailyBookingCount(
               data.bookings,
@@ -1166,7 +1200,15 @@ export function AppProvider({ children }) {
       await upsertDoc('bookings', newBookingId, { bookingCode: `BK-${newBookingId.slice(-6).toUpperCase()}` })
       if (autoAssigned.technicianId) {
         try {
-          await reserveBusySlotsForBooking(autoAssigned.technicianId, newBookingId, descriptors, 'booking')
+          await assignPartner({
+            bookingId: newBookingId,
+            mode: 'specific',
+            technicianId: autoAssigned.technicianId,
+            dateStr: descriptors[0].dateKey,
+            slotIndex: descriptors[0].slotIndex,
+            slotLabel: descriptors[0].slotLabel,
+            reservedSlotIndices: descriptors.map((slot) => slot.slotIndex),
+          })
         } catch (err) {
           await removeDoc('bookings', newBookingId)
           throw err
@@ -1481,7 +1523,12 @@ export function AppProvider({ children }) {
 
   const upsertCategory = async (category) => {
     await withMutating('category', async () => {
-      const payload = { name: category.name, icon: category.icon || '' }
+      const payload = {
+        name: category.name,
+        icon: category.icon || '',
+        videoUrl: String(category.videoUrl || '').trim(),
+        videoEnabled: category.videoEnabled !== false,
+      }
       if (category.id) await upsertDoc('categories', category.id, payload)
       else await createDoc('categories', payload)
     })
@@ -1540,7 +1587,7 @@ export function AppProvider({ children }) {
     if (session?.role !== ROLES.SUPER_ADMIN && session?.role !== ROLES.SERVICE_MANAGER) {
       throw new Error('You are not allowed to manage banners.')
     }
-    const section = String(banner.section || '').trim()
+    const section = normalizeBannerSection(banner.section)
     if (!section) throw new Error('Section is required.')
     const mobileImage = String(banner.mobileImage || '').trim()
     const websiteImage = String(banner.websiteImage || '').trim()
@@ -1640,6 +1687,7 @@ export function AppProvider({ children }) {
           startHour: Number(w.startHour),
           endHour: Number(w.endHour),
           label: String(w.label || `Peak ${i + 1}`).trim() || `Peak ${i + 1}`,
+          enabled: w.enabled !== false,
         }))
       : DEFAULT_PEAK_WINDOWS
     const penalties = {
@@ -2038,6 +2086,9 @@ export function AppProvider({ children }) {
     defaultTechnicianServiceRadiusKm,
     platformCommissionPercent,
     addonFeePercent,
+    sparePartCommissionPercent,
+    customerPlatformFeeType,
+    customerPlatformFeeValue,
     googleReviewUrl,
     homeReviews,
   }) => {
@@ -2051,17 +2102,37 @@ export function AppProvider({ children }) {
     }
     const c = Number(platformCommissionPercent)
     if (!Number.isFinite(c) || c < 0 || c > 100) {
-      throw new Error('Platform commission must be between 0 and 100.')
+      throw new Error('Service commission must be between 0 and 100.')
     }
     const a = Number(addonFeePercent)
     if (!Number.isFinite(a) || a < 0 || a > 100) {
-      throw new Error('Add-on fee percent must be between 0 and 100.')
+      throw new Error('Additional service commission must be between 0 and 100.')
+    }
+    const spare = Number(
+      sparePartCommissionPercent != null ? sparePartCommissionPercent : addonFeePercent,
+    )
+    if (!Number.isFinite(spare) || spare < 0 || spare > 100) {
+      throw new Error('Spare part commission must be between 0 and 100.')
+    }
+    const feeType = String(customerPlatformFeeType || 'fixed').toLowerCase() === 'percent'
+      ? 'percent'
+      : 'fixed'
+    const feeVal = Number(customerPlatformFeeValue)
+    if (!Number.isFinite(feeVal) || feeVal < 0) {
+      throw new Error('Customer platform fee must be 0 or more.')
+    }
+    if (feeType === 'percent' && feeVal > 100) {
+      throw new Error('Customer platform fee percent must be between 0 and 100.')
     }
     await withMutating('platformSettings', async () => {
       const payload = {
         defaultTechnicianServiceRadiusKm: r,
         platformCommissionPercent: c,
         addonFeePercent: a,
+        sparePartCommissionPercent: spare,
+        customerPlatformFeeType: feeType,
+        customerPlatformFeeValue: feeVal,
+        financeSettingsUpdatedAt: new Date().toISOString(),
       }
       if (googleReviewUrl != null) {
         payload.googleReviewUrl = String(googleReviewUrl).trim()
@@ -2100,6 +2171,44 @@ export function AppProvider({ children }) {
       })
     })
     toast.success('Global payment settings saved.')
+  }
+
+  const updateAppPublicSettings = async (patch) => {
+    if (session?.role !== ROLES.SUPER_ADMIN) {
+      throw new Error('Only Super Admins can update support and legal settings.')
+    }
+    if (!isFirebaseConfigured || !db) throw new Error('Firebase is not configured.')
+    const str = (v) => (v == null ? '' : String(v).trim())
+    await withMutating('appSettings', async () => {
+      const payload = { updatedAt: serverTimestamp() }
+      if (Object.prototype.hasOwnProperty.call(patch, 'supportPhone')) {
+        payload.supportPhone = str(patch.supportPhone)
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'supportEmail')) {
+        payload.supportEmail = str(patch.supportEmail)
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'aboutApp')) {
+        payload.aboutApp = str(patch.aboutApp)
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'customerTerms')) {
+        payload.customerTerms = str(patch.customerTerms)
+        payload.customerTermsUpdatedAt = serverTimestamp()
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'customerPrivacyPolicy')) {
+        payload.customerPrivacyPolicy = str(patch.customerPrivacyPolicy)
+        payload.customerPrivacyUpdatedAt = serverTimestamp()
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'partnerTerms')) {
+        payload.partnerTerms = str(patch.partnerTerms)
+        payload.partnerTermsUpdatedAt = serverTimestamp()
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'partnerPrivacyPolicy')) {
+        payload.partnerPrivacyPolicy = str(patch.partnerPrivacyPolicy)
+        payload.partnerPrivacyUpdatedAt = serverTimestamp()
+      }
+      await upsertDoc('settings', 'app', payload)
+    })
+    toast.success('Support & legal settings saved.')
   }
 
   const updateServiceAreas = async (areas) => {
@@ -2256,6 +2365,8 @@ export function AppProvider({ children }) {
   const value = {
     ...data,
     platformSettings,
+    rankingSettings,
+    appSettings,
     metrics,
     theme,
     setTheme,
@@ -2301,12 +2412,12 @@ export function AppProvider({ children }) {
     upsertHomeSection,
     deleteHomeSection,
     seedDefaultHomeSections,
-    rankingSettings,
     updateRankingSettings,
     upsertCoupon,
     deleteCoupon,
     updatePlatformGeneral,
     updateGlobalPaymentSettings,
+    updateAppPublicSettings,
     updateServiceAreas,
     importServicesFromCsv,
     importAdditionalServicesFromCsv,

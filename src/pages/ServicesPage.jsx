@@ -54,7 +54,7 @@ const initialService = {
   },
 }
 
-const initialCategory = { id: '', name: '', icon: '' }
+const initialCategory = { id: '', name: '', icon: '', videoUrl: '', videoEnabled: true }
 
 const initialFaq = { id: '', question: '', answer: '' }
 
@@ -70,7 +70,7 @@ function getServiceImageMode(service) {
   return 'separate'
 }
 
-function ImageSlot({ label, value, disabled, onUploaded }) {
+function ImageSlot({ label, value, disabled, onUploaded, uploadOptions }) {
   const [busy, setBusy] = useState(false)
   return (
     <Field label={label}>
@@ -85,8 +85,10 @@ function ImageSlot({ label, value, disabled, onUploaded }) {
             if (!file) return
             setBusy(true)
             try {
-              const url = await uploadToCloudinary(file)
+              const url = await uploadToCloudinary(file, uploadOptions)
               onUploaded(url)
+            } catch (err) {
+              toast.error(err?.message || 'Image upload failed')
             } finally {
               setBusy(false)
               e.target.value = ''
@@ -350,7 +352,7 @@ export function ServicesPage() {
     <div className="space-y-4">
       <PageHeader
         title="Services Management"
-        description="Catalog, media (Cloudinary), brands, process steps, and global FAQs for the user app."
+        description="Catalog, media, brands, process steps, and global FAQs for the user app."
         actions={
           <>
             <SearchInput value={search} onChange={setSearch} placeholder="Search services..." />
@@ -751,7 +753,12 @@ export function ServicesPage() {
                             if (!file) return
                             setUploading(true)
                             try {
-                              const url = await uploadToCloudinary(file)
+                              const url = await uploadToCloudinary(file, {
+                                kind: 'service',
+                                serviceName: serviceForm.name,
+                                serviceId: serviceForm.id,
+                                slot: `variation-${idx + 1}`,
+                              })
                               const next = [...(serviceForm.variations || [])]
                               next[idx] = { ...next[idx], image: url }
                               setServiceForm({ ...serviceForm, variations: next })
@@ -932,7 +939,7 @@ export function ServicesPage() {
           </div>
 
           <div className="md:col-span-2 rounded-2xl border border-[var(--outline-variant)] bg-[var(--surface-low)]/40 p-4">
-            <p className="text-sm font-semibold text-[var(--on-surface)]">Service images (Cloudinary)</p>
+            <p className="text-sm font-semibold text-[var(--on-surface)]">Service images</p>
             <p className="mt-1 text-xs text-[var(--on-surface-variant)]">
               Use one image everywhere or upload separate images for home, list, and detail views.
             </p>
@@ -977,6 +984,12 @@ export function ServicesPage() {
                   label="Major image"
                   value={serviceForm.homeImage}
                   disabled={uploading}
+                  uploadOptions={{
+                    kind: 'service',
+                    serviceName: serviceForm.name,
+                    serviceId: serviceForm.id,
+                    slot: 'major',
+                  }}
                   onUploaded={(url) =>
                     setServiceForm((c) => ({
                       ...c,
@@ -994,18 +1007,36 @@ export function ServicesPage() {
                   label="Home page"
                   value={serviceForm.homeImage}
                   disabled={uploading}
+                  uploadOptions={{
+                    kind: 'service',
+                    serviceName: serviceForm.name,
+                    serviceId: serviceForm.id,
+                    slot: 'home',
+                  }}
                   onUploaded={(url) => setServiceForm((c) => ({ ...c, homeImage: url, imageUrl: url }))}
                 />
                 <ImageSlot
                   label="Services list"
                   value={serviceForm.listImage}
                   disabled={uploading}
+                  uploadOptions={{
+                    kind: 'service',
+                    serviceName: serviceForm.name,
+                    serviceId: serviceForm.id,
+                    slot: 'list',
+                  }}
                   onUploaded={(url) => setServiceForm((c) => ({ ...c, listImage: url }))}
                 />
                 <ImageSlot
                   label="Service detail"
                   value={serviceForm.detailImage}
                   disabled={uploading}
+                  uploadOptions={{
+                    kind: 'service',
+                    serviceName: serviceForm.name,
+                    serviceId: serviceForm.id,
+                    slot: 'detail',
+                  }}
                   onUploaded={(url) => setServiceForm((c) => ({ ...c, detailImage: url }))}
                 />
               </div>
@@ -1055,7 +1086,12 @@ export function ServicesPage() {
                           if (!file) return
                           setUploading(true)
                           try {
-                            const url = await uploadToCloudinary(file)
+                            const url = await uploadToCloudinary(file, {
+                              kind: 'service',
+                              serviceName: serviceForm.name,
+                              serviceId: serviceForm.id,
+                              slot: `brand-${idx + 1}`,
+                            })
                             const next = [...serviceForm.brands]
                             next[idx] = { ...next[idx], logoImage: url }
                             setServiceForm({ ...serviceForm, brands: next })
@@ -1142,7 +1178,12 @@ export function ServicesPage() {
                         if (!file) return
                         setUploading(true)
                         try {
-                          const url = await uploadToCloudinary(file)
+                          const url = await uploadToCloudinary(file, {
+                            kind: 'service',
+                            serviceName: serviceForm.name,
+                            serviceId: serviceForm.id,
+                            slot: `step-${idx + 1}`,
+                          })
                           const next = [...serviceForm.processSteps]
                           next[idx] = { ...next[idx], image: url }
                           setServiceForm({ ...serviceForm, processSteps: next })
@@ -1213,7 +1254,7 @@ export function ServicesPage() {
 
       <Modal open={categoryOpen} title="Manage Categories" onClose={resetCategory}>
         <div className="space-y-4">
-          <form className="grid gap-4 md:grid-cols-[1fr_1fr_auto]" onSubmit={saveCategory}>
+          <form className="grid gap-4 md:grid-cols-2" onSubmit={saveCategory}>
             <Field label="Category Name">
               <Input
                 value={categoryForm.name}
@@ -1226,6 +1267,24 @@ export function ServicesPage() {
                 value={categoryForm.icon}
                 onChange={(event) => setCategoryForm({ ...categoryForm, icon: event.target.value })}
               />
+            </Field>
+            <Field label="Video URL (optional)">
+              <Input
+                value={categoryForm.videoUrl || ''}
+                onChange={(event) => setCategoryForm({ ...categoryForm, videoUrl: event.target.value })}
+                placeholder="https://…mp4"
+              />
+            </Field>
+            <Field label="Show video">
+              <Select
+                value={categoryForm.videoEnabled === false ? 'false' : 'true'}
+                onChange={(event) =>
+                  setCategoryForm({ ...categoryForm, videoEnabled: event.target.value === 'true' })
+                }
+              >
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </Select>
             </Field>
             <div className="self-end">
               <Button type="submit">{categoryForm.id ? 'Update' : 'Create'}</Button>

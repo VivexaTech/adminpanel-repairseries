@@ -568,7 +568,11 @@ export function HomeSectionsPage() {
                       if (!file) return
                       setUploading(true)
                       try {
-                        const url = await uploadToCloudinary(file)
+                        const url = await uploadToCloudinary(file, {
+                          kind: 'home-section',
+                          sectionId: form.id,
+                          slot: 'static',
+                        })
                         setForm((c) => ({ ...c, staticImage: url }))
                         toast.success('Image uploaded.')
                       } catch (err) {

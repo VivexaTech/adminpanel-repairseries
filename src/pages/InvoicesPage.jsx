@@ -5,7 +5,7 @@ import { DEFAULT_INVOICE_SETTINGS, normalizeInvoiceSettings } from '../constants
 import { useApp } from '../context/useApp'
 import { isFirebaseConfigured } from '../firebase/config'
 import { subscribeDoc } from '../services/firestore'
-import { regenerateInvoice, resendInvoiceEmail } from '../services/invoiceFunctions'
+import { regenerateInvoice, resendInvoiceEmail, downloadInvoicePdf } from '../services/invoiceFunctions'
 import { currency, formatDateTime } from '../utils/helpers'
 
 function invoiceCustomerLabel(invoice, customers) {
@@ -20,8 +20,15 @@ function invoiceCustomerLabel(invoice, customers) {
   )
 }
 
-function invoicePdfUrl(invoice) {
-  return String(invoice?.pdfUrl || invoice?.invoicePdfUrl || '').trim()
+function invoiceHasPdf(invoice) {
+  return Boolean(
+    /res\.cloudinary\.com/i.test(String(invoice?.pdfUrl || invoice?.invoicePdfUrl || '')) ||
+      String(invoice?.invoiceNumber || '').trim(),
+  )
+}
+
+function isCloudinaryPdfUrl(url) {
+  return /res\.cloudinary\.com/i.test(String(url || ''))
 }
 
 export function InvoicesPage() {
@@ -70,13 +77,24 @@ export function InvoicesPage() {
     })
   }, [invoices, customers, search])
 
-  const openPdf = (invoice) => {
-    const url = invoicePdfUrl(invoice)
-    if (!url) {
+  const openPdf = async (invoice) => {
+    const stored = String(invoice?.pdfUrl || invoice?.invoicePdfUrl || '').trim()
+    if (isCloudinaryPdfUrl(stored)) {
+      window.open(stored, '_blank', 'noopener,noreferrer')
+      return
+    }
+    if (!invoice?.bookingId) {
       toast.error('Invoice PDF is not ready yet.')
       return
     }
-    window.open(url, '_blank', 'noopener,noreferrer')
+    try {
+      await downloadInvoicePdf({
+        bookingId: invoice.bookingId,
+        fileName: invoice.fileName || `${invoice.invoiceNumber || invoice.bookingId}.pdf`,
+      })
+    } catch (err) {
+      toast.error(err?.message || 'Could not open invoice PDF.')
+    }
   }
 
   const onDownloadPdf = (invoice) => {
@@ -89,17 +107,21 @@ export function InvoicesPage() {
   }
 
   const onCopyUrl = async (invoice) => {
-    const url = invoicePdfUrl(invoice)
-    if (!url) {
-      toast.error('No Cloudinary URL on this invoice.')
+    const stored = String(invoice?.pdfUrl || invoice?.invoicePdfUrl || '').trim()
+    if (isCloudinaryPdfUrl(stored)) {
+      try {
+        await navigator.clipboard.writeText(stored)
+        toast.success('Invoice URL copied.')
+      } catch {
+        toast.error('Could not copy URL.')
+      }
       return
     }
-    try {
-      await navigator.clipboard.writeText(url)
-      toast.success('Cloudinary URL copied.')
-    } catch {
-      toast.error('Could not copy URL.')
+    if (!invoice?.bookingId) {
+      toast.error('No invoice file on this record.')
+      return
     }
+    toast.message('Download the PDF while signed in if a Cloudinary URL is not stored yet.')
   }
 
   const onResendEmail = async (invoice) => {
@@ -150,7 +172,7 @@ export function InvoicesPage() {
     <div className="space-y-4">
       <PageHeader
         title="Invoices"
-        description="Single Cloudinary Tax Invoice PDF for every booking — view, download, print, resend, or regenerate."
+        description="Tax Invoice PDF for every booking — view, download, print, resend, or regenerate."
         actions={
           <SearchInput
             value={search}
@@ -175,8 +197,8 @@ export function InvoicesPage() {
       <div className="grid gap-4">
         {filtered.map((invoice) => {
           const customer = invoiceCustomerLabel(invoice, customers)
-          const pdfUrl = invoicePdfUrl(invoice)
-          const status = invoice.invoiceStatus || invoice.status || (pdfUrl ? 'issued' : 'pending')
+          const hasPdf = invoiceHasPdf(invoice)
+          const status = invoice.invoiceStatus || invoice.status || (hasPdf ? 'issued' : 'pending')
           return (
             <Card key={invoice.id} className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div className="space-y-1">
@@ -184,7 +206,7 @@ export function InvoicesPage() {
                   <h3 className="text-lg font-semibold text-[var(--on-surface)]">
                     {invoice.invoiceNumber || invoice.id}
                   </h3>
-                  <Badge tone={pdfUrl ? 'success' : status === 'failed' ? 'danger' : 'info'}>
+                  <Badge tone={hasPdf ? 'success' : status === 'failed' ? 'danger' : 'info'}>
                     {status}
                   </Badge>
                   {invoice.isRevisit ? <Badge tone="success">Revisit</Badge> : null}
@@ -214,21 +236,21 @@ export function InvoicesPage() {
                 <Button variant="ghost" onClick={() => setSelected(invoice)}>
                   Details
                 </Button>
-                <Button variant="ghost" disabled={!pdfUrl} onClick={() => openPdf(invoice)}>
+                <Button variant="ghost" disabled={!hasPdf} onClick={() => void openPdf(invoice)}>
                   View Invoice
                 </Button>
-                <Button variant="ghost" disabled={!pdfUrl} onClick={() => onDownloadPdf(invoice)}>
+                <Button variant="ghost" disabled={!hasPdf} onClick={() => void onDownloadPdf(invoice)}>
                   Download PDF
                 </Button>
-                <Button variant="ghost" disabled={!pdfUrl} onClick={() => onPrint(invoice)}>
+                <Button variant="ghost" disabled={!hasPdf} onClick={() => void onPrint(invoice)}>
                   Print
                 </Button>
-                <Button variant="ghost" disabled={!pdfUrl} onClick={() => onCopyUrl(invoice)}>
+                <Button variant="ghost" disabled={!hasPdf} onClick={() => void onCopyUrl(invoice)}>
                   Copy URL
                 </Button>
                 <Button
                   variant="ghost"
-                  disabled={busyKey === `email:${invoice.id}` || !pdfUrl}
+                  disabled={busyKey === `email:${invoice.id}` || !hasPdf}
                   onClick={() => onResendEmail(invoice)}
                 >
                   {busyKey === `email:${invoice.id}` ? 'Sending…' : 'Resend Email'}
@@ -287,8 +309,8 @@ export function InvoicesPage() {
                 {selected.paymentStatus || '—'}
               </p>
               <p className="sm:col-span-2 break-all">
-                <span className="text-[var(--on-surface-variant)]">Cloudinary URL:</span>{' '}
-                {invoicePdfUrl(selected) || '—'}
+                <span className="text-[var(--on-surface-variant)]">Invoice file:</span>{' '}
+                {selected.pdfUrl || selected.invoicePdfUrl || selected.pdfFileKey || selected.fileKey || '—'}
               </p>
             </div>
 
@@ -313,21 +335,21 @@ export function InvoicesPage() {
             ) : null}
 
             <div className="flex flex-wrap gap-2">
-              <Button variant="ghost" disabled={!invoicePdfUrl(selected)} onClick={() => openPdf(selected)}>
+              <Button variant="ghost" disabled={!invoiceHasPdf(selected)} onClick={() => void openPdf(selected)}>
                 View Invoice
               </Button>
-              <Button variant="ghost" disabled={!invoicePdfUrl(selected)} onClick={() => onDownloadPdf(selected)}>
+              <Button variant="ghost" disabled={!invoiceHasPdf(selected)} onClick={() => void onDownloadPdf(selected)}>
                 Download PDF
               </Button>
-              <Button variant="ghost" disabled={!invoicePdfUrl(selected)} onClick={() => onPrint(selected)}>
+              <Button variant="ghost" disabled={!invoiceHasPdf(selected)} onClick={() => void onPrint(selected)}>
                 Print
               </Button>
-              <Button variant="ghost" disabled={!invoicePdfUrl(selected)} onClick={() => onCopyUrl(selected)}>
+              <Button variant="ghost" disabled={!invoiceHasPdf(selected)} onClick={() => void onCopyUrl(selected)}>
                 Copy URL
               </Button>
               <Button
                 variant="ghost"
-                disabled={busyKey === `email:${selected.id}` || !invoicePdfUrl(selected)}
+                disabled={busyKey === `email:${selected.id}` || !invoiceHasPdf(selected)}
                 onClick={() => onResendEmail(selected)}
               >
                 Resend Email

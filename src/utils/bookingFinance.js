@@ -45,24 +45,41 @@ export const sumApprovedAddOnPrices = (booking) => {
   return s
 }
 
-/** Service price only — platform fee base (excludes visiting charge). */
+/** Service price only — partner commission base (never customer payable). */
 export const getServicePriceAmount = (booking) => {
   if (!booking || typeof booking !== 'object') return 0
   const snap = safeMoney(booking.servicePrice)
   if (snap > 0) return snap
   const orig = safeMoney(booking.originalBookingAmount)
   if (orig > 0) return orig
-  return safeMoney(booking.amount ?? booking.baseAmount ?? booking.servicePrice ?? booking.price)
+  const serviceAmount = safeMoney(booking.serviceAmount)
+  if (serviceAmount > 0) return serviceAmount
+  const fee = safeMoney(
+    booking.customerPlatformFee ?? booking.quotedConvenienceFee ?? booking.convenienceFee,
+  )
+  const gst = safeMoney(booking.quotedGstAmount ?? booking.gstAmount)
+  const payable = safeMoney(booking.quotedFinalAmount)
+  const amount = safeMoney(booking.amount ?? booking.baseAmount)
+  if (fee > 0) {
+    const gross = payable > 0 ? payable : amount
+    const fromPayable = Math.round((gross - fee - gst) * 100) / 100
+    if (fromPayable > 0) return fromPayable
+  }
+  return amount
 }
 
-/** Customer base total (service + visiting) before add-ons. */
+function customerFeeAmount(booking) {
+  const fee = safeMoney(booking?.customerPlatformFee ?? booking?.quotedConvenienceFee)
+  if (fee > 0) return fee
+  return safeMoney(booking?.visitingCharge)
+}
+
+/** Customer base total (service + convenience/platform fee or visiting charge) before add-ons. */
 export const getCustomerBaseTotal = (booking) => {
   if (!booking || typeof booking !== 'object') return 0
   const snap = safeMoney(booking.customerBaseTotal)
   if (snap > 0) return snap
-  const svc = getServicePriceAmount(booking)
-  const visiting = safeMoney(booking.visitingCharge)
-  return svc + visiting
+  return getServicePriceAmount(booking) + customerFeeAmount(booking)
 }
 
 /**
@@ -100,14 +117,17 @@ export const computeFinanceBreakdown = (booking) => {
   const { platformFeePercent, addonFeePercent } = getBookingFeePercents(booking)
   const servicePrice = getServicePriceAmount(booking)
   const visitingCharge = safeMoney(booking.visitingCharge)
-  const customerBaseTotal = servicePrice + visitingCharge
+  const customerFee = customerFeeAmount(booking)
+  const customerBaseTotal = servicePrice + customerFee
   const addedServicesAmount = sumApprovedAddOnPrices(booking)
-  const finalBookingAmount = customerBaseTotal + addedServicesAmount
-  const platformFeeAmount = Math.round(servicePrice * (platformFeePercent / 100))
-  const addonFeeAmount = Math.round(addedServicesAmount * (addonFeePercent / 100))
+  const frozenFinal = safeMoney(booking.finalBookingAmount)
+  const finalBookingAmount =
+    frozenFinal > 0 ? frozenFinal : customerBaseTotal + addedServicesAmount
+  const platformFeeAmount = Math.round(servicePrice * (platformFeePercent / 100) * 100) / 100
+  const addonFeeAmount = Math.round(addedServicesAmount * (addonFeePercent / 100) * 100) / 100
   const technicianFinalEarning =
     servicePrice - platformFeeAmount + addedServicesAmount - addonFeeAmount
-  const companyEarnings = platformFeeAmount + visitingCharge + addonFeeAmount
+  const companyEarnings = platformFeeAmount + customerFee + addonFeeAmount
   const totalDeduction = finalBookingAmount - technicianFinalEarning
 
   return {

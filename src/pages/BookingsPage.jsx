@@ -32,6 +32,20 @@ import { geocodeAddressString } from '../services/geocode'
 import { getBookingLatLng, getTechnicianLatLng, haversineDistanceKm, parseCoord, parseCoordLng } from '../utils/geo'
 import { isTechnicianAssignable } from '../utils/technicianVerification'
 import { BookingWorkProofSection } from '../components/BookingWorkProofSection'
+import { downloadInvoicePdf, regenerateInvoice } from '../services/invoiceFunctions'
+
+async function openBookingInvoicePdf(booking) {
+  const stored = String(booking?.invoicePdfUrl || '').trim()
+  if (/res\.cloudinary\.com/i.test(stored)) {
+    window.open(stored, '_blank', 'noopener,noreferrer')
+    return stored
+  }
+  await downloadInvoicePdf({
+    bookingId: booking.id,
+    fileName: booking.invoiceNumber ? `${booking.invoiceNumber}.pdf` : undefined,
+  })
+  return stored
+}
 import {
   DEFAULT_SCHEDULING_SETTINGS,
   subscribeSchedulingSettings,
@@ -81,17 +95,6 @@ function technicianDistanceKm(technician, bookingLatLng) {
   const { lat: bLat, lng: bLng } = bookingLatLng || {}
   if (tLat == null || tLng == null || bLat == null || bLng == null) return null
   return haversineDistanceKm(tLat, tLng, bLat, bLng)
-}
-
-function technicianWithinBookingRadius(technician, bookingLatLng, platformKm) {
-  const { lat: tLat, lng: tLng } = getTechnicianLatLng(technician)
-  if (tLat == null || tLng == null) return false
-  const defaultR = Number(platformKm) > 0 ? Number(platformKm) : 10
-  const techR = Number(technician.serviceRadius) > 0 ? Number(technician.serviceRadius) : defaultR
-  const maxKm = Math.min(techR, defaultR)
-  const { lat: bLat, lng: bLng } = bookingLatLng
-  if (bLat == null || bLng == null) return true
-  return haversineDistanceKm(tLat, tLng, bLat, bLng) <= maxKm
 }
 
 function isCancellableStatus(status) {
@@ -479,7 +482,6 @@ export function BookingsPage() {
     backfillMissingBookingCoordinates,
     loading,
     mutating,
-    platformSettings,
     rankingSettings,
   } = useApp()
   const [search, setSearch] = useState('')
@@ -635,21 +637,12 @@ export function BookingsPage() {
             /* optional geocode */
           }
         }
-        const bookingLatLng = { lat, lng }
-        const platformKmRaw = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
-        const platformKmResolved =
-          Number.isFinite(platformKmRaw) && platformKmRaw > 0 ? platformKmRaw : 10
-
         const busy = new Set()
         const candidates = assignableRoster.filter((t) => {
           if (!service?.categoryId) return true
           return String(t.categoryId || '').trim() === service.categoryId
         })
         for (const t of candidates) {
-          if (!technicianWithinBookingRadius(t, bookingLatLng, platformKmResolved)) {
-            busy.add(t.id)
-            continue
-          }
           const v = await verifyBusySlotsFree(t.id, descriptors, null)
           if (!v.ok) busy.add(t.id)
         }
@@ -672,7 +665,6 @@ export function BookingsPage() {
     createForm.longitude,
     serviceMap,
     assignableRoster,
-    platformSettings?.defaultTechnicianServiceRadiusKm,
     schedulingSettings.travelBufferMinutes,
   ])
 
@@ -731,11 +723,6 @@ export function BookingsPage() {
         return
       }
 
-      const bookingLatLng = getBookingLatLng(booking)
-      const platformKmRaw = Number(platformSettings?.defaultTechnicianServiceRadiusKm)
-      const platformKmResolved =
-        Number.isFinite(platformKmRaw) && platformKmRaw > 0 ? platformKmRaw : 10
-
       setAvailability({ loading: true, busyTechIds: new Set(), error: '' })
       try {
         const busy = new Set()
@@ -745,10 +732,6 @@ export function BookingsPage() {
           return true
         })
         for (const t of candidates) {
-          if (!technicianWithinBookingRadius(t, bookingLatLng, platformKmResolved)) {
-            busy.add(t.id)
-            continue
-          }
           const v = await verifyBusySlotsFree(t.id, descriptors, bookingId)
           if (!v.ok) busy.add(t.id)
         }
@@ -767,7 +750,6 @@ export function BookingsPage() {
     modalState.mode,
     modalState.booking,
     assignableRoster,
-    platformSettings?.defaultTechnicianServiceRadiusKm,
     serviceMap,
     schedulingSettings.travelBufferMinutes,
   ])
@@ -1268,10 +1250,8 @@ export function BookingsPage() {
                         variant="ghost"
                         disabled={!modalState.booking.invoicePdfUrl}
                         onClick={() =>
-                          window.open(
-                            modalState.booking.invoicePdfUrl,
-                            '_blank',
-                            'noopener,noreferrer',
+                          void openBookingInvoicePdf(modalState.booking).catch((e) =>
+                            toast.error(e.message || 'Could not open invoice'),
                           )
                         }
                       >
@@ -1281,10 +1261,8 @@ export function BookingsPage() {
                         variant="ghost"
                         disabled={!modalState.booking.invoicePdfUrl}
                         onClick={() =>
-                          window.open(
-                            modalState.booking.invoicePdfUrl,
-                            '_blank',
-                            'noopener,noreferrer',
+                          void openBookingInvoicePdf(modalState.booking).catch((e) =>
+                            toast.error(e.message || 'Could not open invoice'),
                           )
                         }
                       >
@@ -1295,8 +1273,17 @@ export function BookingsPage() {
                         disabled={!modalState.booking.invoicePdfUrl}
                         onClick={async () => {
                           try {
-                            await navigator.clipboard.writeText(modalState.booking.invoicePdfUrl)
-                            toast.success('Cloudinary URL copied')
+                            const stored = String(modalState.booking.invoicePdfUrl || '').trim()
+                            if (/res\.cloudinary\.com/i.test(stored)) {
+                              await navigator.clipboard.writeText(stored)
+                            } else {
+                              const result = await regenerateInvoice({
+                                bookingId: modalState.booking.id,
+                                sendEmail: false,
+                              })
+                              await navigator.clipboard.writeText(result?.pdfUrl || stored)
+                            }
+                            toast.success('Invoice URL copied')
                           } catch {
                             toast.error('Could not copy URL')
                           }

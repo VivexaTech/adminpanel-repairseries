@@ -136,7 +136,7 @@ export function OffersPage() {
           </Field>
 
           <div className="rounded-2xl border border-dashed border-[var(--outline-variant)] p-4">
-            <div className="text-sm text-[var(--on-surface-variant)]">Upload banner image (Cloudinary).</div>
+            <div className="text-sm text-[var(--on-surface-variant)]">Upload banner image.</div>
             <input
               className="mt-3 w-full text-sm"
               type="file"
@@ -147,7 +147,10 @@ export function OffersPage() {
                 if (!file) return
                 setUploading(true)
                 try {
-                  const url = await uploadToCloudinary(file)
+                  const url = await uploadToCloudinary(file, {
+                    kind: 'offer',
+                    offerId: form.id,
+                  })
                   setForm((c) => ({ ...c, image: url }))
                 } finally {
                   setUploading(false)

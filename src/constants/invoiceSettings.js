@@ -14,12 +14,14 @@ export const DEFAULT_INVOICE_SETTINGS = Object.freeze({
   email: 'repairseries@gmail.com',
   website: '',
   logoUrl: '',
+  udyamNumber: '',
   upiId: 'repairseries@upi',
   terms:
     'Goods/Services once delivered will not be taken back.\nWarranty is applicable only where mentioned.\nPayment is due immediately after completion of service.\nAll disputes are subject to Aligarh Jurisdiction only.\nThis is a computer-generated invoice and does not require a signature.',
   thankYouMessage: 'Thank You FOR CHOOSING REPAIR SERIES',
   invoicePrefix: 'INV',
   gstPercent: 18,
+  gstEnabled: false,
 })
 
 export function normalizeInvoiceSettings(raw = {}) {
@@ -38,6 +40,7 @@ export function normalizeInvoiceSettings(raw = {}) {
     email: String(raw.email || DEFAULT_INVOICE_SETTINGS.email).trim(),
     website: String(raw.website || '').trim(),
     logoUrl: String(raw.logoUrl || '').trim(),
+    udyamNumber: String(raw.udyamNumber || raw.udyam || '').trim(),
     upiId: String(raw.upiId || DEFAULT_INVOICE_SETTINGS.upiId).trim(),
     terms: String(raw.terms || DEFAULT_INVOICE_SETTINGS.terms).trim(),
     thankYouMessage: String(
@@ -48,5 +51,6 @@ export function normalizeInvoiceSettings(raw = {}) {
       .toUpperCase()
       .slice(0, 8),
     gstPercent: Number.isFinite(gst) && gst >= 0 ? gst : 18,
+    gstEnabled: raw.gstEnabled === true || raw.gstEnabled === 'true',
   }
 }

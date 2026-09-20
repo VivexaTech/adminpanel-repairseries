@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button, Card, Field, Input, PageHeader } from '../components/ui'
 import { useApp } from '../context/useApp'
-import { storage } from '../firebase/config'
 import {
   deleteStorageFileAtDownloadUrl,
   uploadGlobalPaymentQrImage,
   validatePaymentQrFile,
 } from '../services/platformPaymentStorage'
+import { isStorageConfigured } from '../services/storageUpload'
 import { DEFAULT_ADDON_FEE_PERCENT } from '../utils/bookingFinance'
 import { DEFAULT_PLATFORM_COMMISSION_PERCENT, formatDateTime } from '../utils/helpers'
 
@@ -28,10 +28,14 @@ export function PlatformSettingsPage() {
   const [radiusKm, setRadiusKm] = useState('')
   const [commission, setCommission] = useState('')
   const [addonCommission, setAddonCommission] = useState('')
+  const [spareCommission, setSpareCommission] = useState('')
+  const [customerFeeType, setCustomerFeeType] = useState('fixed')
+  const [customerFeeValue, setCustomerFeeValue] = useState('0')
   const [globalUpiInput, setGlobalUpiInput] = useState('')
   const [qrImageUrl, setQrImageUrl] = useState('')
   const [googleReviewInput, setGoogleReviewInput] = useState('')
   const qrFileRef = useRef(null)
+  const storageConfigured = isStorageConfigured()
 
   useEffect(() => {
     const r = platformSettings?.defaultTechnicianServiceRadiusKm
@@ -40,6 +44,25 @@ export function PlatformSettingsPage() {
     setRadiusKm(r != null && r !== '' ? String(r) : '')
     setCommission(c != null && c !== '' ? String(c) : '')
     setAddonCommission(a != null && a !== '' ? String(a) : '')
+    setSpareCommission(
+      platformSettings?.sparePartCommissionPercent != null &&
+        platformSettings?.sparePartCommissionPercent !== ''
+        ? String(platformSettings.sparePartCommissionPercent)
+        : a != null && a !== ''
+          ? String(a)
+          : '',
+    )
+    setCustomerFeeType(
+      String(platformSettings?.customerPlatformFeeType || 'fixed').toLowerCase() === 'percent'
+        ? 'percent'
+        : 'fixed',
+    )
+    setCustomerFeeValue(
+      platformSettings?.customerPlatformFeeValue != null &&
+        platformSettings?.customerPlatformFeeValue !== ''
+        ? String(platformSettings.customerPlatformFeeValue)
+        : '0',
+    )
     setGlobalUpiInput(
       platformSettings?.globalUpiId != null && platformSettings?.globalUpiId !== ''
         ? String(platformSettings.globalUpiId)
@@ -60,6 +83,9 @@ export function PlatformSettingsPage() {
     platformSettings?.defaultTechnicianServiceRadiusKm,
     platformSettings?.platformCommissionPercent,
     platformSettings?.addonFeePercent,
+    platformSettings?.sparePartCommissionPercent,
+    platformSettings?.customerPlatformFeeType,
+    platformSettings?.customerPlatformFeeValue,
     platformSettings?.globalUpiId,
     platformSettings?.globalPaymentQr,
     platformSettings?.googleReviewUrl,
@@ -70,16 +96,30 @@ export function PlatformSettingsPage() {
     const r = Number(radiusKm)
     const c = Number(commission)
     const a = Number(addonCommission)
-    if (!Number.isFinite(r) || r <= 0) {
-      toast.error('Technician service radius must be a positive number (e.g. 5, 7, 10).')
+    const spare = Number(spareCommission)
+    const feeVal = Number(customerFeeValue)
+    if (!Number.isFinite(r) || r < 0) {
+      toast.error('Partner map radius must be 0 or more. It does not limit bookings.')
       return
     }
     if (!Number.isFinite(c) || c < 0 || c > 100) {
-      toast.error('Platform commission must be between 0 and 100.')
+      toast.error('Service commission must be between 0 and 100.')
       return
     }
     if (!Number.isFinite(a) || a < 0 || a > 100) {
-      toast.error('Add-on fee percent must be between 0 and 100.')
+      toast.error('Additional service commission must be between 0 and 100.')
+      return
+    }
+    if (!Number.isFinite(spare) || spare < 0 || spare > 100) {
+      toast.error('Spare part commission must be between 0 and 100.')
+      return
+    }
+    if (!Number.isFinite(feeVal) || feeVal < 0) {
+      toast.error('Customer platform fee must be 0 or more.')
+      return
+    }
+    if (customerFeeType === 'percent' && feeVal > 100) {
+      toast.error('Customer platform fee percent must be between 0 and 100.')
       return
     }
     try {
@@ -87,6 +127,9 @@ export function PlatformSettingsPage() {
         defaultTechnicianServiceRadiusKm: r,
         platformCommissionPercent: c,
         addonFeePercent: a,
+        sparePartCommissionPercent: spare,
+        customerPlatformFeeType: customerFeeType,
+        customerPlatformFeeValue: feeVal,
         googleReviewUrl: googleReviewInput,
       })
     } catch (err) {
@@ -115,17 +158,17 @@ export function PlatformSettingsPage() {
       toast.error(v.error)
       return
     }
-    if (!storage) {
-      toast.error('Firebase Storage is not configured (set VITE_FIREBASE_STORAGE_BUCKET).')
+    if (!isStorageConfigured()) {
+      toast.error('Set VITE_WEBSITE_API_URL so payment QR images can upload to Cloudinary.')
       return
     }
     try {
       const old = qrImageUrl
-      if (old?.includes('firebasestorage.googleapis.com')) {
-        await deleteStorageFileAtDownloadUrl(old)
-      }
       const url = await uploadGlobalPaymentQrImage(file)
       setQrImageUrl(url)
+      if (old && old !== url) {
+        await deleteStorageFileAtDownloadUrl(old)
+      }
       toast.success('Image uploaded. Click Save changes to store the URL in Firestore.')
     } catch (err) {
       toast.error(err?.message || 'Upload failed.')
@@ -159,7 +202,7 @@ export function PlatformSettingsPage() {
     <div className="mx-auto max-w-3xl space-y-6">
       <PageHeader
         title="Platform Settings"
-        description="Live values from Firestore settings/general. New bookings snapshot platform and add-on fee percents; changing these does not alter existing bookings."
+        description="Live values from Firestore settings/general. New bookings snapshot these rates; changing them does not alter completed or frozen bookings."
       />
 
       <Card className="space-y-6 rounded-3xl border border-[var(--outline-variant)]/50 p-5 shadow-[0_20px_50px_-24px_rgba(0,0,0,0.35)] sm:p-6">
@@ -175,7 +218,7 @@ export function PlatformSettingsPage() {
         </p>
 
         <form className="space-y-4" onSubmit={onSubmit}>
-          <Field label="Technician Service Radius (KM)">
+          <Field label="Partner map radius (KM, display only)">
             <Input
               type="number"
               min="0"
@@ -184,10 +227,12 @@ export function PlatformSettingsPage() {
               onChange={(e) => setRadiusKm(e.target.value)}
               placeholder="e.g. 10"
               disabled={busy || settingsLoading}
-              required
             />
           </Field>
-          <Field label="Platform fee on original booking (%)">
+          <p className="text-xs text-[var(--on-surface-variant)]">
+            Shown on the Partner App map. Booking assignment is not limited to this radius.
+          </p>
+          <Field label="Company commission on service (%)">
             <Input
               type="number"
               min="0"
@@ -200,10 +245,10 @@ export function PlatformSettingsPage() {
               required
             />
             <span className="text-xs font-normal text-[var(--on-surface-variant)]">
-              Applied only to service + visiting (frozen amounts per booking).
+              Taken from service value only. Example: ₹1000 service at 30% → company ₹300, partner ₹700.
             </span>
           </Field>
-          <Field label="Platform fee on approved add-ons (%)">
+          <Field label="Company commission on additional services (%)">
             <Input
               type="number"
               min="0"
@@ -215,8 +260,49 @@ export function PlatformSettingsPage() {
               disabled={busy || settingsLoading}
               required
             />
+          </Field>
+          <Field label="Company commission on spare parts (%)">
+            <Input
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value={spareCommission}
+              onChange={(e) => setSpareCommission(e.target.value)}
+              placeholder="0–100"
+              disabled={busy || settingsLoading}
+              required
+            />
             <span className="text-xs font-normal text-[var(--on-surface-variant)]">
-              Separate rate for extra / additional services after customer approval.
+              Example: ₹1000 spare at 10% → company ₹100, partner ₹900.
+            </span>
+          </Field>
+          <Field label="Customer convenience / platform fee type">
+            <select
+              className="w-full rounded-xl border border-[var(--outline-variant)] bg-[var(--surface)] px-3 py-2 text-sm"
+              value={customerFeeType}
+              onChange={(e) => setCustomerFeeType(e.target.value)}
+              disabled={busy || settingsLoading}
+            >
+              <option value="fixed">Fixed amount (₹)</option>
+              <option value="percent">Percentage of service value</option>
+            </select>
+          </Field>
+          <Field label={customerFeeType === 'percent' ? 'Customer platform fee (%)' : 'Customer platform fee (₹)'}>
+            <Input
+              type="number"
+              min="0"
+              max={customerFeeType === 'percent' ? '100' : undefined}
+              step="0.01"
+              value={customerFeeValue}
+              onChange={(e) => setCustomerFeeValue(e.target.value)}
+              placeholder={customerFeeType === 'percent' ? 'e.g. 10' : 'e.g. 100'}
+              disabled={busy || settingsLoading}
+              required
+            />
+            <span className="text-xs font-normal text-[var(--on-surface-variant)]">
+              Charged to the customer in addition to service price. Not included in partner commission base.
+              Visiting charge is no longer used for new bookings.
             </span>
           </Field>
           <Field label="Google Review URL">
@@ -273,16 +359,16 @@ export function PlatformSettingsPage() {
               <Button
                 type="button"
                 variant="secondary"
-                disabled={busy || settingsLoading || !storage}
+                disabled={busy || settingsLoading || !storageConfigured}
                 onClick={() => qrFileRef.current?.click()}
               >
                 {qrImageUrl ? 'Replace QR' : 'Upload QR'}
               </Button>
               <span className="text-xs text-[var(--on-surface-variant)]">JPG, PNG, WebP · max 5 MB</span>
             </div>
-            {!storage ? (
+            {!storageConfigured ? (
               <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-                Storage bucket missing in environment — QR upload disabled.
+                Cloudinary is not configured — QR upload disabled.
               </p>
             ) : null}
           </div>
@@ -301,7 +387,7 @@ export function PlatformSettingsPage() {
                     <Button
                       type="button"
                       variant="ghost"
-                      disabled={busy || settingsLoading || !storage}
+                      disabled={busy || settingsLoading || !storageConfigured}
                       onClick={() => qrFileRef.current?.click()}
                     >
                       Replace QR

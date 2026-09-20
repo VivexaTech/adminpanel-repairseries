@@ -78,7 +78,12 @@ export function ComingSoonServicesPage() {
     if (!file) return
     setUploading(true)
     try {
-      const url = await uploadToCloudinary(file)
+      const url = await uploadToCloudinary(file, {
+        kind: 'coming-soon',
+        serviceName: form.name,
+        serviceId: form.id,
+        slot: 'preview',
+      })
       setForm((f) => ({ ...f, imageUrl: url }))
       toast.success('Image uploaded.')
     } catch (err) {

@@ -4,6 +4,7 @@ import { Badge, Button, Card, Field, Input, PageHeader, Textarea } from '../comp
 import { useApp } from '../context/useApp'
 import { isFirebaseConfigured } from '../firebase/config'
 import { createDoc, subscribeCollection } from '../services/firestore'
+import { processNotificationOutbox } from '../services/websiteApi'
 import { formatDateTime } from '../utils/helpers'
 
 function outboxStatus(row) {
@@ -20,6 +21,7 @@ export function NotificationsPage() {
   const [broadcasts, setBroadcasts] = useState([])
   const [loadingBroadcasts, setLoadingBroadcasts] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [draining, setDraining] = useState(false)
   const [form, setForm] = useState({ title: '', body: '', segmentNote: '' })
 
   useEffect(() => {
@@ -78,9 +80,34 @@ export function NotificationsPage() {
   }, [session?.id])
 
   const pendingCount = useMemo(
-    () => outbox.filter((r) => !(r.processed === true || r.status === 'sent')).length,
+    () =>
+      outbox.filter(
+        (r) =>
+          !(
+            r.processed === true ||
+            r.status === 'sent' ||
+            r.status === 'abandoned'
+          ),
+      ).length,
     [outbox],
   )
+
+  const onRetryPending = async () => {
+    if (draining) return
+    setDraining(true)
+    try {
+      const result = await processNotificationOutbox()
+      const processed = Number(result?.processed || 0)
+      const abandoned = Number(result?.abandoned || 0)
+      toast.success(
+        `Retried pending notifications (${processed} sent${abandoned ? `, ${abandoned} abandoned` : ''}).`,
+      )
+    } catch (err) {
+      toast.error(err?.message || 'Could not retry pending notifications.')
+    } finally {
+      setDraining(false)
+    }
+  }
 
   const onBroadcast = async (e) => {
     e.preventDefault()
@@ -114,7 +141,7 @@ export function NotificationsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Notifications"
-        description="Monitor booking notification outbox and queue broadcast messages for later delivery."
+        description="Booking pushes are sent immediately by the website API. This page shows fallback outbox items and optional broadcasts."
       />
 
       <Card className="space-y-4 p-5 sm:p-6">
@@ -122,7 +149,7 @@ export function NotificationsPage() {
           <h2 className="text-lg font-semibold text-[var(--on-surface)]">Broadcast</h2>
           <p className="mt-1 text-sm text-[var(--on-surface-variant)]">
             Writes to <code className="rounded bg-[var(--surface-high)] px-1.5 py-0.5 text-xs">broadcastNotifications</code>.
-            A Cloud Function or ops process can send these later. Segment note is informational only.
+            Broadcasts are stored for admins to review. They are not sent by a cron job.
           </p>
         </div>
         <form className="space-y-4" onSubmit={onBroadcast}>
@@ -160,10 +187,13 @@ export function NotificationsPage() {
           <div>
             <h2 className="text-lg font-semibold text-[var(--on-surface)]">Booking outbox</h2>
             <p className="mt-1 text-sm text-[var(--on-surface-variant)]">
-              Recent docs from <code className="rounded bg-[var(--surface-high)] px-1.5 py-0.5 text-xs">bookingNotificationOutbox</code>
+              Fallback queue used only when an immediate notification send fails.
               {!outboxDenied ? ` · ${pendingCount} pending` : ''}
             </p>
           </div>
+          <Button type="button" disabled={draining || pendingCount < 1} onClick={() => void onRetryPending()}>
+            {draining ? 'Retrying…' : 'Retry pending'}
+          </Button>
         </div>
 
         {outboxDenied ? (

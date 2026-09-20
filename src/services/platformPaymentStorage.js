@@ -1,13 +1,10 @@
-import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage'
+import { deleteObject, ref } from 'firebase/storage'
 import { isFirebaseConfigured, storage } from '../firebase/config'
+import { deleteStoredFile, uploadMedia } from './storageUpload'
 
-const ensureStorage = () => {
-  if (!isFirebaseConfigured || !storage) {
-    throw new Error('Firebase Storage is not configured (check VITE_FIREBASE_STORAGE_BUCKET).')
-  }
-}
+const ALLOWED_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp'])
+const MAX_BYTES = 5 * 1024 * 1024
 
-/** Path inside bucket from a Firebase download URL (v0 REST format). */
 function storagePathFromDownloadUrl(downloadUrl) {
   try {
     const u = new URL(downloadUrl)
@@ -21,9 +18,6 @@ function storagePathFromDownloadUrl(downloadUrl) {
   }
 }
 
-const ALLOWED_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp'])
-const MAX_BYTES = 5 * 1024 * 1024
-
 export function validatePaymentQrFile(file) {
   if (!file) return { ok: false, error: 'No file selected.' }
   const t = (file.type || '').toLowerCase()
@@ -36,29 +30,22 @@ export function validatePaymentQrFile(file) {
   return { ok: true }
 }
 
-/**
- * Uploads a payment QR image for platform settings.
- * @returns {Promise<string>} download URL
- */
 export async function uploadGlobalPaymentQrImage(file) {
-  ensureStorage()
-  const safeName = String(file.name || 'qr').replace(/[^\w.-]+/g, '_')
-  const path = `platform-settings/payment-qr/${Date.now()}_${safeName}`
-  const storageRef = ref(storage, path)
-  await uploadBytes(storageRef, file, { contentType: file.type || 'image/png' })
-  return getDownloadURL(storageRef)
+  return uploadMedia(file, { kind: 'payment-qr', slot: 'qr' })
 }
 
-/** Deletes a file given its Firebase HTTPS download URL. Ignores invalid URLs. */
 export async function deleteStorageFileAtDownloadUrl(downloadUrl) {
   if (!downloadUrl || typeof downloadUrl !== 'string') return
-  if (!downloadUrl.includes('firebasestorage.googleapis.com')) return
-  ensureStorage()
-  try {
-    const path = storagePathFromDownloadUrl(downloadUrl)
-    if (!path) return
-    await deleteObject(ref(storage, path))
-  } catch (e) {
-    console.warn('[storage] delete payment QR file', e)
+  if (downloadUrl.includes('firebasestorage.googleapis.com') || downloadUrl.includes('firebasestorage.app')) {
+    if (!isFirebaseConfigured || !storage) return
+    try {
+      const path = storagePathFromDownloadUrl(downloadUrl)
+      if (!path) return
+      await deleteObject(ref(storage, path))
+    } catch (e) {
+      console.warn('[storage] delete payment QR file', e)
+    }
+    return
   }
+  await deleteStoredFile({ url: downloadUrl })
 }

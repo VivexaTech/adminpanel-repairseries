@@ -5,6 +5,7 @@ import { DEFAULT_INVOICE_SETTINGS, normalizeInvoiceSettings } from '../constants
 import { useApp } from '../context/useApp'
 import { isFirebaseConfigured } from '../firebase/config'
 import { subscribeDoc, upsertDoc } from '../services/firestore'
+import { isStorageConfigured, uploadMedia } from '../services/storageUpload'
 
 export function InvoiceSettingsPage() {
   const { mutating, session } = useApp()
@@ -120,6 +121,20 @@ export function InvoiceSettingsPage() {
                 placeholder="repairseries@upi"
               />
             </Field>
+            <Field label="GST enabled">
+              <label className="flex items-center gap-2 text-sm text-[var(--on-surface)]">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.gstEnabled)}
+                  onChange={(e) => setField('gstEnabled', e.target.checked)}
+                  disabled={busy || loadingDoc}
+                />
+                Add GST on top of the taxable amount for new bookings
+              </label>
+              <span className="text-xs font-normal text-[var(--on-surface-variant)]">
+                Off by default. Existing invoices keep their original GST treatment.
+              </span>
+            </Field>
             <Field label="GST percent">
               <Input
                 type="number"
@@ -183,6 +198,13 @@ export function InvoiceSettingsPage() {
                 disabled={busy || loadingDoc}
               />
             </Field>
+            <Field label="Udyam number">
+              <Input
+                value={form.udyamNumber || ''}
+                onChange={(e) => setField('udyamNumber', e.target.value)}
+                disabled={busy || loadingDoc}
+              />
+            </Field>
             <Field label="Website">
               <Input
                 value={form.website}
@@ -190,12 +212,38 @@ export function InvoiceSettingsPage() {
                 disabled={busy || loadingDoc}
               />
             </Field>
-            <Field label="Logo URL">
+            <Field label="Logo">
               <Input
                 value={form.logoUrl}
                 onChange={(e) => setField('logoUrl', e.target.value)}
                 disabled={busy || loadingDoc}
+                placeholder="Cloudinary URL"
               />
+              <input
+                className="mt-2 text-sm"
+                type="file"
+                accept="image/*"
+                disabled={busy || loadingDoc}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  if (!file) return
+                  if (!isStorageConfigured()) {
+                    toast.error('Set VITE_WEBSITE_API_URL so the logo can upload to Cloudinary.')
+                    return
+                  }
+                  try {
+                    const url = await uploadMedia(file, { kind: 'company', slot: 'logo' })
+                    setField('logoUrl', url)
+                    toast.success('Logo uploaded.')
+                  } catch (err) {
+                    toast.error(err?.message || 'Logo upload failed.')
+                  }
+                }}
+              />
+              {form.logoUrl ? (
+                <img src={form.logoUrl} alt="" className="mt-3 h-16 w-16 rounded-lg object-contain" />
+              ) : null}
             </Field>
           </div>
 

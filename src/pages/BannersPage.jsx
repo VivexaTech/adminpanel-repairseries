@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge, Button, Card, Field, Input, Modal, PageHeader, SearchInput, Select } from '../components/ui'
-import { BANNER_SECTION_LABELS, BANNER_SECTIONS } from '../constants/catalog'
+import { BANNER_SECTION_LABELS, BANNER_SECTIONS, normalizeBannerSection } from '../constants/catalog'
 import { uploadToCloudinary } from '../services/cloudinary'
 import { useApp } from '../context/useApp'
 
@@ -38,7 +38,7 @@ export function BannersPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
     return (banners || [])
-      .filter((b) => sectionFilter === 'all' || String(b.section || '') === sectionFilter)
+      .filter((b) => sectionFilter === 'all' || normalizeBannerSection(b.section) === sectionFilter)
       .filter((b) => {
         if (!q) return true
         const hay = [b.title, b.section, b.redirectLink, BANNER_SECTION_LABELS[b.section], b.id]
@@ -64,7 +64,12 @@ export function BannersPage() {
     if (!file) return
     setUploading(true)
     try {
-      const url = await uploadToCloudinary(file)
+      const url = await uploadToCloudinary(file, {
+        kind: 'banner',
+        section: form.section,
+        bannerId: form.id,
+        slot: field,
+      })
       setForm((c) => {
         const next = { ...c, [field]: url }
         if (!next.image && (field === 'mobileImage' || field === 'websiteImage')) next.image = url
@@ -166,7 +171,7 @@ export function BannersPage() {
                               setForm({
                                 id: row.id,
                                 title: row.title ?? '',
-                                section: row.section || 'home',
+                                section: normalizeBannerSection(row.section || 'home'),
                                 mobileImage: row.mobileImage || '',
                                 websiteImage: row.websiteImage || '',
                                 image: row.image || row.mobileImage || row.websiteImage || '',
